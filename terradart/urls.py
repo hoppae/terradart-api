@@ -16,8 +16,12 @@ Including another URLconf
 """
 from django.urls import path
 
-from city_detail.views import get_city_from_region
+from city_detail.views import (
+    get_city_from_region,
+    get_city_detail_view,
+)
 
 urlpatterns = [
     path("get-city/region/<str:region>/", get_city_from_region, name="get-city-from-region"),
+    path("get-city-detail/<str:city>/", get_city_detail_view, name="get-city-detail"),
 ]

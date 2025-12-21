@@ -29,6 +29,17 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
+REDIS_URL = os.getenv("REDIS_URL")
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache" if REDIS_URL else "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": REDIS_URL or "terradart-locmem",
+        "OPTIONS": {"CLIENT_CLASS": "django_redis.client.DefaultClient"} if REDIS_URL else {},
+        "KEY_PREFIX": "terradart",
+    }
+}
+
 
 # Application definition
 

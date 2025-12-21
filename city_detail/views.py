@@ -18,7 +18,10 @@ def get_city_detail_view(request, city: str):
     except ValueError:
         return Response({"error": "radius must be an integer"}, status=400)
 
-    result = get_city_detail(city, radius)
+    state = request.query_params.get("state")
+    country = request.query_params.get("country")
+
+    result = get_city_detail(city, radius, state, country)
     if "error" in result:
         return Response(result["error"], status=result["error_status"])
     return Response(result["data"])

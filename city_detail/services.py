@@ -7,6 +7,7 @@ from amadeus import Client, ResponseError
 from django.core.cache import cache
 from geopy.exc import GeopyError
 from geopy.geocoders import Nominatim
+from urllib.parse import quote_plus
 
 CSC_API_KEY = os.getenv("CSC_API_KEY")
 AMADEUS_CLIENT_ID = os.getenv("AMADEUS_CLIENT_ID")
@@ -68,6 +69,7 @@ def _get_countries_by_region(region: str):
     try:
         response = requests.get(
             f"https://restcountries.com/v3.1/region/{region}",
+            params={"fields": "capital,name,cca2,cca3"},
             timeout=10,
         )
         response.raise_for_status()
@@ -79,6 +81,77 @@ def _get_countries_by_region(region: str):
             "error": {"error": "Failed to fetch region data", "detail": str(exception)},
             "error_status": 502,
         }
+
+
+def _get_country_details(iso2_country_code: str | None):
+    if not iso2_country_code:
+        return None
+
+    cache_key = f"country-info:{iso2_country_code.lower()}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        response = requests.get(
+            f"https://restcountries.com/v3.1/alpha/{iso2_country_code}",
+            params={"fields": "name,flags,region,subregion"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, list) and data:
+            data = data[0]
+        cache.set(cache_key, data, timeout=CACHE_TIMEOUT_SECONDS)
+        return data
+    except requests.exceptions.RequestException:
+        return None
+
+
+def _get_states_by_country(iso2_country_code: str):
+    if not iso2_country_code or not CSC_API_KEY:
+        return []
+
+    cache_key = f"states:{iso2_country_code.lower()}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        response = requests.get(
+            f"https://api.countrystatecity.in/v1/countries/{iso2_country_code}/states",
+            headers={"X-CSCAPI-KEY": CSC_API_KEY},
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        cache.set(cache_key, data, timeout=CACHE_TIMEOUT_SECONDS)
+        return data
+    except requests.exceptions.RequestException:
+        return []
+
+
+def _get_cities_by_state(iso2_country_code: str, iso2_state_code: str):
+    if not iso2_country_code or not iso2_state_code or not CSC_API_KEY:
+        return []
+
+    cache_key = f"state-cities:{iso2_country_code.lower()}:{iso2_state_code.lower()}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        response = requests.get(
+            f"https://api.countrystatecity.in/v1/countries/{iso2_country_code}/states/{iso2_state_code}/cities",
+            headers={"X-CSCAPI-KEY": CSC_API_KEY},
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        cache.set(cache_key, data, timeout=CACHE_TIMEOUT_SECONDS)
+        return data
+    except requests.exceptions.RequestException:
+        return []
 
 
 def resolve_city_for_region(region: str, wants_capital: bool):
@@ -94,25 +167,70 @@ def resolve_city_for_region(region: str, wants_capital: bool):
         }
 
     country = random.choice(countries)
+    iso2_country_code = country.get("cca2")
+    iso3_country_code = country.get("cca3")
     capital_list = country.get("capital") or []
     capital_city = capital_list[0] if isinstance(capital_list, list) and capital_list else None
 
     if wants_capital:
-        return {"data": {"region": region, "city": capital_city}}
+        return {
+            "data": {
+                "region": region,
+                "city": capital_city,
+                "iso2_country_code": iso2_country_code,
+                "iso3_country_code": iso3_country_code,
+            }
+        }
 
-    iso2_country_code = country.get("cca2")
-    cities = _get_cities_by_country(iso2_country_code)
+    states = _get_states_by_country(iso2_country_code)
+    if not isinstance(states, list) or not states:
+        return {
+            "error": {"error": "No states found for country", "country": iso2_country_code},
+            "error_status": 404,
+        }
 
     random_city = None
-    if isinstance(cities, list) and cities:
-        candidate = random.choice(cities)
-        if isinstance(candidate, dict):
-            random_city = candidate.get("name")
+    state_iso2 = None
+    state_name = None
+
+    # Try a few random states to find one with cities that can be geocoded
+    for _ in range(min(len(states), 5)):
+        state_choice = random.choice(states)
+        state_iso2_candidate = state_choice.get("iso2")
+        state_name_candidate = state_choice.get("name")
+        if not state_iso2_candidate:
+            continue
+
+        cities = _get_cities_by_state(iso2_country_code, state_iso2_candidate)
+        if isinstance(cities, list) and cities:
+            candidate = random.choice(cities)
+            if isinstance(candidate, dict):
+                city_name = candidate.get("name")
+                if _can_geocode(city_name, state_name_candidate, iso2_country_code):
+                    random_city = city_name
+                    state_iso2 = state_iso2_candidate
+                    state_name = state_name_candidate
+                    break
 
     if not random_city:
         random_city = capital_city
 
-    return {"data": {"region": region, "city": random_city}}
+    if not random_city:
+        return {
+            "error": {"error": "No city found for region", "region": region, "country": iso2_country_code},
+            "error_status": 404,
+        }
+
+    return {
+        "data": {
+            "region": region,
+            "city": random_city,
+            "iso2_country_code": iso2_country_code,
+            "iso3_country_code": iso3_country_code,
+            "state_name": state_name,
+            "iso2_state_code": state_iso2,
+        }
+    }
 
 
 def _sanitize_html(value):
@@ -145,6 +263,31 @@ def _sanitize_activities(data):
     if isinstance(data, dict):
         return _sanitize_activity(data)
     return data
+
+
+def _normalize_cache_part(value: str | None) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = value.strip().lower()
+    if not normalized:
+        return ""
+    return quote_plus(normalized)
+
+
+def _can_geocode(city: str | None, state: str | None, country_iso2: str | None) -> bool:
+    if not city:
+        return False
+    parts = [city]
+    if state:
+        parts.append(state)
+    if country_iso2:
+        parts.append(country_iso2)
+    query = ", ".join(parts)
+    try:
+        location = _geolocator.geocode(query, country_codes=country_iso2)
+        return location is not None
+    except GeopyError:
+        return False
 
 
 def _get_amadeus_client():
@@ -192,13 +335,25 @@ def _get_activities_by_coordinates(latitude: float, longitude: float, radius: in
         }
 
 
-def get_city_detail(city: str, radius: int = 1):
-    base_cache_key = f"city-detail-base:{city.lower()}"
+def get_city_detail(city: str, radius: int = 1, state: str | None = None, country: str | None = None):
+    cache_city = _normalize_cache_part(city)
+    cache_state = _normalize_cache_part(state)
+    cache_country = _normalize_cache_part(country)
+
+
+    base_cache_key = f"city-detail-base:{cache_city}:{cache_state}:{cache_country}"
     base_data = cache.get(base_cache_key)
 
     if base_data is None:
+        query_parts = [city]
+        if state:
+            query_parts.append(state)
+        if country:
+            query_parts.append(country)
+        query = ", ".join(query_parts)
+
         try:
-            location = _geolocator.geocode(city)
+            location = _geolocator.geocode(query, country_codes=country)
         except GeopyError as exc:
             return {
                 "error": {"error": "Geocoding failed", "detail": str(exc)},
@@ -206,7 +361,12 @@ def get_city_detail(city: str, radius: int = 1):
             }
 
         if not location:
-            return {"error": {"error": "City not found", "city": city}, "error_status": 404}
+            return {
+                "error": {"error": "City not found", "city": city, "state": state, "country": country},
+                "error_status": 404,
+            }
+
+        country_details = _get_country_details(country)
 
         base_data = {
             "city": city,
@@ -214,9 +374,11 @@ def get_city_detail(city: str, radius: int = 1):
                 "latitude": location.latitude,
                 "longitude": location.longitude,
             },
+            "state": state,
+            "country": country,
+            "country_details": country_details,
         }
         cache.set(base_cache_key, base_data, timeout=CACHE_TIMEOUT_SECONDS)
-
     coordinates = base_data.get("coordinates") or {}
     latitude = coordinates.get("latitude")
     longitude = coordinates.get("longitude")

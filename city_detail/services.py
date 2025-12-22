@@ -1,11 +1,12 @@
 import os
 import random
+import re
 
 import bleach
 import requests
 from amadeus import Client, ResponseError
 from django.core.cache import cache
-from geopy.exc import GeopyError
+from geopy.exc import GeocoderTimedOut, GeopyError
 from geopy.geocoders import Nominatim
 from urllib.parse import quote_plus
 
@@ -15,7 +16,7 @@ AMADEUS_CLIENT_SECRET = os.getenv("AMADEUS_CLIENT_SECRET")
 
 CACHE_TIMEOUT_SECONDS = int(os.getenv("CACHE_TIMEOUT_SECONDS", "300"))
 
-_geolocator = Nominatim(user_agent="terradart-api")
+_geolocator = Nominatim(user_agent="terradart-api", timeout=5)
 
 _amadeus_client = None
 
@@ -37,6 +38,25 @@ _ALLOWED_HTML_ATTRS = {
 }
 
 
+def _eligible_country(country):
+    if not isinstance(country, dict):
+        return False
+    population = country.get("population")
+    if isinstance(population, (int, float)) and population <= 0:
+        return False
+    return True
+
+
+def _pick_country(countries):
+    if not isinstance(countries, list) or not countries:
+        return None
+    for _ in range(len(countries)):
+        candidate = random.choice(countries)
+        if _eligible_country(candidate):
+            return candidate
+    return random.choice(countries)
+
+
 def _get_cities_by_country(iso2_country_code: str):
     if not iso2_country_code or not CSC_API_KEY:
         return []
@@ -50,7 +70,7 @@ def _get_cities_by_country(iso2_country_code: str):
         response = requests.get(
             f"https://api.countrystatecity.in/v1/countries/{iso2_country_code}/cities",
             headers={"X-CSCAPI-KEY": CSC_API_KEY},
-            timeout=10,
+            timeout=5,
         )
         response.raise_for_status()
         data = response.json()
@@ -69,8 +89,8 @@ def _get_countries_by_region(region: str):
     try:
         response = requests.get(
             f"https://restcountries.com/v3.1/region/{region}",
-            params={"fields": "capital,name,cca2,cca3"},
-            timeout=10,
+            params={"fields": "capital,name,cca2,cca3,population"},
+            timeout=5,
         )
         response.raise_for_status()
         data = response.json()
@@ -96,7 +116,7 @@ def _get_country_details(iso2_country_code: str | None):
         response = requests.get(
             f"https://restcountries.com/v3.1/alpha/{iso2_country_code}",
             params={"fields": "name,flags,region,subregion"},
-            timeout=10,
+            timeout=5,
         )
         response.raise_for_status()
         data = response.json()
@@ -121,7 +141,7 @@ def _get_states_by_country(iso2_country_code: str):
         response = requests.get(
             f"https://api.countrystatecity.in/v1/countries/{iso2_country_code}/states",
             headers={"X-CSCAPI-KEY": CSC_API_KEY},
-            timeout=10,
+            timeout=5,
         )
         response.raise_for_status()
         data = response.json()
@@ -144,7 +164,7 @@ def _get_cities_by_state(iso2_country_code: str, iso2_state_code: str):
         response = requests.get(
             f"https://api.countrystatecity.in/v1/countries/{iso2_country_code}/states/{iso2_state_code}/cities",
             headers={"X-CSCAPI-KEY": CSC_API_KEY},
-            timeout=10,
+            timeout=5,
         )
         response.raise_for_status()
         data = response.json()
@@ -160,13 +180,14 @@ def resolve_city_for_region(region: str, wants_capital: bool):
         return countries_result
     countries = countries_result["data"]
 
-    if not isinstance(countries, list) or not countries:
+    country = _pick_country(countries)
+
+    if country is None:
         return {
             "error": {"error": "No country data found for region", "region": region},
             "error_status": 404,
         }
 
-    country = random.choice(countries)
     iso2_country_code = country.get("cca2")
     iso3_country_code = country.get("cca3")
     capital_list = country.get("capital") or []
@@ -290,6 +311,41 @@ def _can_geocode(city: str | None, state: str | None, country_iso2: str | None) 
         return False
 
 
+def _geocode_city(city: str, state: str | None, country: str | None):
+    attempts = []
+    parts = [city]
+
+    if state:
+        parts.append(state)
+    if country:
+        parts.append(country)
+
+    attempts.append((", ".join(parts), country))
+
+    if country and state:
+        attempts.append((f"{city}, {country}", country))
+
+    attempts.append((city, None))
+
+    for query, country_code in attempts:
+        try:
+            location = _geolocator.geocode(query, country_codes=country_code, timeout=5)
+        except GeocoderTimedOut:
+            location = None
+        except GeopyError as exc:
+            return {
+                "error": {"error": "Geocoding failed", "detail": str(exc)},
+                "error_status": 502,
+            }
+        if location:
+            return {"location": location}
+
+    return {
+        "error": {"error": "City not found", "city": city, "state": state, "country": country},
+        "error_status": 404,
+    }
+
+
 def _get_amadeus_client():
     global _amadeus_client
     if _amadeus_client is not None:
@@ -335,6 +391,144 @@ def _get_activities_by_coordinates(latitude: float, longitude: float, radius: in
         }
 
 
+def _fetch_extract(title: str):
+    response = requests.get(
+        "https://en.wikipedia.org/w/api.php",
+        params={
+            "action": "query",
+            "prop": "extracts",
+            "exintro": "",
+            "explaintext": "",
+            "format": "json",
+            "titles": title,
+        },
+        headers={
+            "User-Agent": "terradart-api (contact: admin@terradart.com)",
+        },
+        timeout=5,
+    )
+    response.raise_for_status()
+    data = response.json()
+    pages = data.get("query", {}).get("pages", {})
+    if isinstance(pages, dict) and pages:
+        first_page = next(iter(pages.values()))
+        extract = first_page.get("extract")
+        return _clean_first_sentence(extract)
+    return None
+
+
+def _extract_mentions_location(extract: str | None, state_name: str | None, country_name: str | None):
+    if not extract:
+        return False
+    text = extract.lower()
+    if state_name and state_name.lower() in text:
+        return True
+    if country_name and country_name.lower() in text:
+        return True
+    return False
+
+
+def _clean_first_sentence(extract: str | None) -> str | None:
+    if not isinstance(extract, str):
+        return extract
+
+    parts = re.split(r"(?<=[.!?])\s", extract, maxsplit=1)
+    first = parts[0] if parts else extract
+    rest = parts[1] if len(parts) > 1 else ""
+
+    # manual cleanup for missing text
+    first = first.replace("()", "").replace("(, ", "(").replace("( ", "(").replace("( ", "(")
+
+    if rest:
+        return f"{first} {rest}"
+    return first
+
+
+def _wiki_opensearch(term: str, limit: int = 5):
+    response = requests.get(
+        "https://en.wikipedia.org/w/api.php",
+        params={
+            "action": "opensearch",
+            "search": term,
+            "limit": limit,
+            "namespace": 0,
+            "format": "json",
+            "redirects": "resolve"
+        },
+        headers={
+            "User-Agent": "terradart-api (contact: admin@terradart.com)",
+        },
+        timeout=5,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if isinstance(data, list) and len(data) > 1 and isinstance(data[1], list):
+        return data[1]
+    return []
+
+
+def _get_wikipedia_extract(city: str, state: str | None = None, country: str | None = None):
+    country_name = None
+
+    if country:
+        country_details = _get_country_details(country)
+        if isinstance(country_details, dict):
+            name_info = country_details.get("name") or {}
+            country_name = name_info.get("common") or name_info.get("official")
+        if not country_name:
+            country_name = country
+
+    try:
+        chosen_extract = None
+
+        if state:
+            title = f"{city}, {state}"
+            extract = _fetch_extract(title)
+
+            if extract:
+                chosen_extract = extract
+            else:
+                if country_name:
+                    country_title = f"{city}, {country_name}"
+                    country_extract = _fetch_extract(country_title)
+                    if country_extract:
+                        chosen_extract = country_extract
+
+                if chosen_extract is None:
+                    extract = _fetch_extract(city)
+                    has_location = _extract_mentions_location(extract, state, country_name)
+                    if has_location:
+                        chosen_extract = extract
+
+        else:
+            extract = _fetch_extract(city)
+            has_location = _extract_mentions_location(extract, None, country_name)
+
+            if has_location:
+                chosen_extract = extract
+            elif country_name:
+                country_title = f"{city}, {country_name}"
+                country_extract = _fetch_extract(country_title)
+                if country_extract:
+                    chosen_extract = country_extract
+
+        if chosen_extract is None:
+            titles = _wiki_opensearch(city, limit=5)
+            if isinstance(titles, list) and titles:
+                for opensearch_title in titles:
+                    extract = _fetch_extract(opensearch_title)
+                    if _extract_mentions_location(extract, state, country_name):
+                        chosen_extract = extract
+                        break
+
+        return {"data": chosen_extract}
+    except requests.exceptions.RequestException as exception:
+        return {
+            "error": {"error": "Failed to fetch Wikipedia extract", "detail": str(exception)},
+            "error_status": 502,
+        }
+
+
 def get_city_detail(city: str, radius: int = 1, state: str | None = None, country: str | None = None):
     cache_city = _normalize_cache_part(city)
     cache_state = _normalize_cache_part(state)
@@ -345,26 +539,10 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None, countr
     base_data = cache.get(base_cache_key)
 
     if base_data is None:
-        query_parts = [city]
-        if state:
-            query_parts.append(state)
-        if country:
-            query_parts.append(country)
-        query = ", ".join(query_parts)
-
-        try:
-            location = _geolocator.geocode(query, country_codes=country)
-        except GeopyError as exc:
-            return {
-                "error": {"error": "Geocoding failed", "detail": str(exc)},
-                "error_status": 502,
-            }
-
-        if not location:
-            return {
-                "error": {"error": "City not found", "city": city, "state": state, "country": country},
-                "error_status": 404,
-            }
+        geocode_result = _geocode_city(city, state, country)
+        if "error" in geocode_result:
+            return geocode_result
+        location = geocode_result["location"]
 
         country_details = _get_country_details(country)
 
@@ -379,6 +557,7 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None, countr
             "country_details": country_details,
         }
         cache.set(base_cache_key, base_data, timeout=CACHE_TIMEOUT_SECONDS)
+
     coordinates = base_data.get("coordinates") or {}
     latitude = coordinates.get("latitude")
     longitude = coordinates.get("longitude")
@@ -392,6 +571,9 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None, countr
     if "error" in activities:
         return activities
 
+    wiki_extract = _get_wikipedia_extract(city, state, country)
+    wiki_extract_text = None if "error" in wiki_extract else wiki_extract.get("data")
+
     activities_data = activities.get("data")
     sanitized_activities = _sanitize_activities(activities_data)
 
@@ -399,6 +581,7 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None, countr
         "data": {
             **base_data,
             "activities": sanitized_activities,
+            "wikipedia_extract": wiki_extract_text,
         }
     }
 

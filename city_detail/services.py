@@ -1,6 +1,7 @@
 import os
 import random
 import re
+from datetime import datetime
 
 import bleach
 import requests
@@ -391,6 +392,121 @@ def _get_activities_by_coordinates(latitude: float, longitude: float, radius: in
         }
 
 
+def _parse_iso(ts: str | None):
+    if not ts or not isinstance(ts, str):
+        return None
+    try:
+        ts_norm = ts.replace("Z", "+00:00")
+        return datetime.fromisoformat(ts_norm)
+    except Exception:
+        return None
+
+
+def _nearest_index(current_ts: str | None, series: list[str] | None):
+    cur_dt = _parse_iso(current_ts)
+    if not cur_dt or not isinstance(series, list) or not series:
+        return None
+    best_idx = None
+    best_delta = None
+    for i, ts in enumerate(series):
+        dt = _parse_iso(ts)
+        if not dt:
+            continue
+        delta = abs((dt - cur_dt).total_seconds())
+        if best_delta is None or delta < best_delta:
+            best_delta = delta
+            best_idx = i
+    return best_idx
+
+
+def _pick_indexed(series, idx):
+    if idx is not None and isinstance(series, list) and len(series) > idx:
+        return series[idx]
+    return None
+
+
+def _get_weather_by_coordinates(latitude: float, longitude: float):
+    try:
+        response = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": latitude,
+                "longitude": longitude,
+                "current_weather": True,
+                "hourly": ",".join(
+                    [
+                        "temperature_2m",
+                        "apparent_temperature",
+                        "relativehumidity_2m",
+                        "precipitation",
+                        "precipitation_probability",
+                        "windspeed_10m",
+                        "winddirection_10m",
+                        "cloudcover",
+                    ]
+                ),
+                "daily": ",".join(
+                    [
+                        "temperature_2m_max",
+                        "temperature_2m_min",
+                        "precipitation_sum",
+                        "precipitation_probability_max",
+                        "weathercode",
+                    ]
+                ),
+                "forecast_days": 2,
+                "timezone": "auto",
+                "temperature_unit": "fahrenheit",
+                "windspeed_unit": "mph",
+            },
+            timeout=5,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        current = data.get("current_weather") or {}
+        hourly = data.get("hourly") or {}
+        hourly_time = hourly.get("time") or []
+
+        # Align current time with nearest hourly metrics to get humidity/precip/clouds
+        current_time = current.get("time")
+        idx = _nearest_index(current_time, hourly_time)
+
+        current_payload = {
+            "time": current_time,
+            "temperature": current.get("temperature"),
+            "apparent_temperature": _pick_indexed(hourly.get("apparent_temperature", []), idx),
+            "humidity": _pick_indexed(hourly.get("relativehumidity_2m", []), idx),
+            "precipitation": _pick_indexed(hourly.get("precipitation", []), idx),
+            "precipitation_probability": _pick_indexed(hourly.get("precipitation_probability", []), idx),
+            "windspeed": current.get("windspeed"),
+            "winddirection": current.get("winddirection"),
+            "cloudcover": _pick_indexed(hourly.get("cloudcover", []), idx),
+            "weathercode": current.get("weathercode"),
+        }
+
+        daily = data.get("daily") or {}
+        next_day = None
+
+        if isinstance(daily.get("time"), list) and len(daily.get("time")) > 1:
+            next_day = {
+                "date": daily["time"][1],
+                "temperature_max": daily.get("temperature_2m_max", [None, None])[1],
+                "temperature_min": daily.get("temperature_2m_min", [None, None])[1],
+                "precipitation_sum": daily.get("precipitation_sum", [None, None])[1],
+                "precipitation_probability_max": daily.get("precipitation_probability_max", [None, None])[1],
+                "weathercode": daily.get("weathercode", [None, None])[1],
+            }
+
+        return {"data": {"current": current_payload, "next_day": next_day, "raw": data}}
+    except requests.exceptions.RequestException as exception:
+        status_code = getattr(getattr(exception, "response", None), "status_code", 502)
+        return {
+            "error": {"error": "Failed to fetch weather", "detail": str(exception)},
+            "error_status": status_code,
+        }
+
+
 def _fetch_extract(title: str):
     response = requests.get(
         "https://en.wikipedia.org/w/api.php",
@@ -437,7 +553,7 @@ def _clean_first_sentence(extract: str | None) -> str | None:
     rest = parts[1] if len(parts) > 1 else ""
 
     # manual cleanup for missing text
-    first = first.replace("()", "").replace("(, ", "(").replace("( ", "(").replace("( ", "(")
+    first = first.replace("()", "").replace("(, ", "(").replace("(;", "(").replace("( ", "(").replace("( ", "(").replace("(; ", "(")
 
     if rest:
         return f"{first} {rest}"
@@ -571,16 +687,22 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None, countr
     if "error" in activities:
         return activities
 
+    weather = _get_weather_by_coordinates(latitude, longitude)
+    if "error" in weather:
+        return weather
+
     wiki_extract = _get_wikipedia_extract(city, state, country)
     wiki_extract_text = None if "error" in wiki_extract else wiki_extract.get("data")
 
     activities_data = activities.get("data")
     sanitized_activities = _sanitize_activities(activities_data)
+    weather_data = weather.get("data")
 
     return {
         "data": {
             **base_data,
             "activities": sanitized_activities,
+            "weather": weather_data,
             "wikipedia_extract": wiki_extract_text,
         }
     }

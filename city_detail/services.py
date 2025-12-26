@@ -9,6 +9,7 @@ from amadeus import Client, ResponseError
 from django.core.cache import cache
 from geopy.exc import GeocoderTimedOut, GeopyError
 from geopy.geocoders import Nominatim
+from terradart.api_logging import log_api_failure
 from urllib.parse import quote_plus
 
 CSC_API_KEY = os.getenv("CSC_API_KEY")
@@ -77,7 +78,10 @@ def _get_cities_by_country(iso2_country_code: str):
         data = response.json()
         cache.set(cache_key, data, timeout=CACHE_TIMEOUT_SECONDS)
         return data
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as exception:
+        log_api_failure("city_detail_cities_by_country_fetch_error", reason = str(exception),
+            context = {"iso2_country_code": iso2_country_code})
+
         return []
 
 
@@ -98,6 +102,9 @@ def _get_countries_by_region(region: str):
         cache.set(cache_key, data, timeout=CACHE_TIMEOUT_SECONDS)
         return {"data": data}
     except requests.exceptions.RequestException as exception:
+        log_api_failure("city_detail_countries_by_region_fetch_error", reason = str(exception),
+            context = {"region": region})
+
         return {
             "error": {"error": "Failed to fetch region data", "detail": str(exception)},
             "error_status": 502,
@@ -125,7 +132,10 @@ def _get_country_details(iso2_country_code: str | None):
             data = data[0]
         cache.set(cache_key, data, timeout=CACHE_TIMEOUT_SECONDS)
         return data
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as exception:
+        log_api_failure("city_detail_country_details_fetch_error", reason = str(exception),
+            context = {"iso2_country_code": iso2_country_code})
+
         return None
 
 
@@ -148,7 +158,10 @@ def _get_states_by_country(iso2_country_code: str):
         data = response.json()
         cache.set(cache_key, data, timeout=CACHE_TIMEOUT_SECONDS)
         return data
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as exception:
+        log_api_failure("city_detail_states_by_country_fetch_error", reason = str(exception),
+            context = {"iso2_country_code": iso2_country_code})
+
         return []
 
 
@@ -171,7 +184,10 @@ def _get_cities_by_state(iso2_country_code: str, iso2_state_code: str):
         data = response.json()
         cache.set(cache_key, data, timeout=CACHE_TIMEOUT_SECONDS)
         return data
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as exception:
+        log_api_failure("city_detail_cities_by_state_fetch_error", reason = str(exception),
+            context = {"iso2_country_code": iso2_country_code, "iso2_state_code": iso2_state_code})
+
         return []
 
 
@@ -334,12 +350,18 @@ def _geocode_city(city: str, state: str | None, country: str | None):
         except GeocoderTimedOut:
             location = None
         except GeopyError as exc:
+            log_api_failure("city_detail_geocode_error", reason = str(exc),
+                context = {"city": city, "state": state, "country": country, "query": query}, level="ERROR")
+
             return {
                 "error": {"error": "Geocoding failed", "detail": str(exc)},
                 "error_status": 502,
             }
         if location:
             return {"location": location}
+
+    log_api_failure("city_detail_geocode_not_found", reason = "City lookup exhausted without a match",
+        context = {"city": city, "state": state, "country": country})
 
     return {
         "error": {"error": "City not found", "city": city, "state": state, "country": country},
@@ -384,6 +406,8 @@ def _get_activities_by_coordinates(latitude: float, longitude: float, radius: in
         cache.set(cache_key, response.data, timeout=CACHE_TIMEOUT_SECONDS)
         return {"data": response.data}
     except ResponseError as exception:
+        log_api_failure("city_detail_activities_fetch_error", reason = str(exception),
+            context={"latitude": latitude, "longitude": longitude, "radius": radius})
         status_code = getattr(exception, "response", None)
         status_code = getattr(status_code, "status_code", 502)
         return {
@@ -500,6 +524,9 @@ def _get_weather_by_coordinates(latitude: float, longitude: float):
 
         return {"data": {"current": current_payload, "next_day": next_day, "raw": data}}
     except requests.exceptions.RequestException as exception:
+        log_api_failure("city_detail_weather_fetch_error", reason=str(exception),
+            context={"latitude": latitude, "longitude": longitude})
+
         status_code = getattr(getattr(exception, "response", None), "status_code", 502)
         return {
             "error": {"error": "Failed to fetch weather", "detail": str(exception)},
@@ -553,7 +580,7 @@ def _clean_first_sentence(extract: str | None) -> str | None:
     rest = parts[1] if len(parts) > 1 else ""
 
     # manual cleanup for missing text
-    first = first.replace("()", "").replace("(, ", "(").replace("(;", "(").replace("( ", "(").replace("( ", "(").replace("(; ", "(")
+    first = first.replace("()", "").replace("(, ", "(").replace("(;", "(").replace("( ", "(").replace("( ", "(").replace("(; ", "(").replace("(or ; ", "(").replace(" )", ")")
 
     if rest:
         return f"{first} {rest}"
@@ -639,6 +666,9 @@ def _get_wikipedia_extract(city: str, state: str | None = None, country: str | N
 
         return {"data": chosen_extract}
     except requests.exceptions.RequestException as exception:
+        log_api_failure("city_detail_wikipedia_fetch_error", reason = str(exception),
+            context = {"city": city, "state": state, "country": country})
+
         return {
             "error": {"error": "Failed to fetch Wikipedia extract", "detail": str(exception)},
             "error_status": 502,

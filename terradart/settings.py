@@ -134,6 +134,13 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 # CORS
+REST_FRAMEWORK = {
+    "DEFAULT_THROTTLE_RATES": {
+        "city-region": "30/minute",
+        "city-detail": "10/minute",
+    }
+}
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
 ]

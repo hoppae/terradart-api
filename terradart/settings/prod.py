@@ -10,19 +10,9 @@ if SECRET_KEY == "django-insecure-local":
 
 DEBUG = False
 
-ALLOWED_HOSTS = ["terradart.com", "www.terradart.com"]
+ALLOWED_HOSTS = ["api.terradart.com"]
 
 CORS_ALLOWED_ORIGINS = ["https://terradart.com", "https://www.terradart.com"]
-
-RAILWAY_DOMAIN = os.getenv("RAILWAY_PRIVATE_DOMAIN")
-if RAILWAY_DOMAIN:
-    ALLOWED_HOSTS = [*ALLOWED_HOSTS, RAILWAY_DOMAIN]
-    CORS_ALLOWED_ORIGINS = [
-        *CORS_ALLOWED_ORIGINS,
-        f"https://{RAILWAY_DOMAIN}",
-    ]
-
-CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 
 DB_URL = os.getenv("DATABASE_URL")
 if DB_URL:

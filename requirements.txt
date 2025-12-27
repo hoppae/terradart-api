@@ -9,7 +9,9 @@ django-redis==6.0.0
 djangorestframework==3.16.1
 geographiclib==2.1
 geopy==2.4.1
+gunicorn==23.0.0
 idna==3.11
+packaging==25.0
 pip_system_certs==5.3
 redis==7.1.0
 requests==2.32.5

@@ -7,6 +7,9 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-local")
 
 REDIS_URL = os.getenv("REDIS_URL")
 
+AMADEUS_ENABLED = True
+FOURSQUARE_ENABLED = True
+
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache" if REDIS_URL else "django.core.cache.backends.locmem.LocMemCache",

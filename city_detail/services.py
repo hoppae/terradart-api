@@ -6,6 +6,7 @@ from datetime import datetime
 import bleach
 import requests
 from amadeus import Client, ResponseError
+from django.conf import settings
 from django.core.cache import cache
 from geopy.exc import GeocoderTimedOut, GeopyError
 from geopy.geocoders import Nominatim
@@ -15,6 +16,7 @@ from urllib.parse import quote_plus
 CSC_API_KEY = os.getenv("CSC_API_KEY")
 AMADEUS_CLIENT_ID = os.getenv("AMADEUS_CLIENT_ID")
 AMADEUS_CLIENT_SECRET = os.getenv("AMADEUS_CLIENT_SECRET")
+FOURSQUARE_API_KEY = os.getenv("FOURSQUARE_API_KEY")
 
 CACHE_TIMEOUT_SECONDS = int(os.getenv("CACHE_TIMEOUT_SECONDS", "300"))
 
@@ -371,6 +373,9 @@ def _geocode_city(city: str, state: str | None, country: str | None):
 
 def _get_amadeus_client():
     global _amadeus_client
+    if not getattr(settings, "AMADEUS_ENABLED", True):
+        return {"disabled": True}
+
     if _amadeus_client is not None:
         return _amadeus_client
 
@@ -394,8 +399,11 @@ def _get_activities_by_coordinates(latitude: float, longitude: float, radius: in
         return {"data": cached}
 
     client = _get_amadeus_client()
-    if isinstance(client, dict) and "error" in client:
-        return client
+    if isinstance(client, dict):
+        if client.get("disabled"):
+            return {"data": []}
+        if "error" in client:
+            return client
 
     try:
         response = client.shopping.activities.get(
@@ -412,6 +420,86 @@ def _get_activities_by_coordinates(latitude: float, longitude: float, radius: in
         status_code = getattr(status_code, "status_code", 502)
         return {
             "error": {"error": "Failed to fetch activities", "detail": str(exception)},
+            "error_status": status_code,
+        }
+
+
+def _get_places_by_coordinates(latitude: float, longitude: float, radius: int = 10):
+    cache_key = f"places:{latitude}:{longitude}:{radius}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return {"data": cached}
+
+    if not getattr(settings, "FOURSQUARE_ENABLED", True):
+        return {"data": []}
+
+    if not FOURSQUARE_API_KEY:
+        return {
+            "error": {"error": "Missing Foursquare API key"},
+            "error_status": 500,
+        }
+
+    try:
+        radius_meters = min(radius * 1000, 100000)
+    except Exception:
+        radius_meters = 10000
+
+    try:
+        response = requests.get(
+            "https://places-api.foursquare.com/places/search",
+            params={
+                "ll": f"{latitude},{longitude}",
+                "radius": radius_meters,
+                "limit": 50,
+                "sort": "RATING",
+                "fields": ",".join(
+                    [
+                        "fsq_place_id",
+                        "name",
+                        "categories",
+                        "location",
+                        "latitude",
+                        "longitude",
+                        "tel",
+                        "email",
+                        "website",
+                        "social_media",
+                        "link",
+                        "date_closed",
+                        "attributes",
+                        "description",
+                        "hours",
+                        "menu",
+                        "photos",
+                        "place_actions",
+                        "popularity",
+                        "price",
+                        "rating",
+                        "stats",
+                        "tastes",
+                        "veracity_rating"
+                    ]
+                ),
+            },
+            headers={
+                "Accept": "application/json",
+                "X-Places-Api-Version": "2025-06-17",
+                "Authorization": f"Bearer {FOURSQUARE_API_KEY}"
+            },
+            timeout=5,
+        )
+        response.raise_for_status()
+        data = response.json()
+        results = data.get("results", []) if isinstance(data, dict) else []
+        cache.set(cache_key, results, timeout=CACHE_TIMEOUT_SECONDS)
+        return {"data": results}
+    except requests.exceptions.RequestException as exception:
+        log_api_failure("city_detail_places_fetch_error", reason=str(exception),
+            context={"latitude": latitude, "longitude": longitude, "radius": radius})
+
+        status_code = getattr(getattr(exception, "response", None), "status_code", 502)
+        return {
+            "error": {"error": "Failed to fetch places", "detail": str(exception)},
             "error_status": status_code,
         }
 
@@ -713,9 +801,13 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None, countr
             "error_status": 500,
         }
 
-    activities = _get_activities_by_coordinates(latitude, longitude, radius)
+    activities = _get_activities_by_coordinates(latitude, longitude)
     if "error" in activities:
         return activities
+
+    places = _get_places_by_coordinates(latitude, longitude)
+    if "error" in places:
+        return places
 
     weather = _get_weather_by_coordinates(latitude, longitude)
     if "error" in weather:
@@ -726,12 +818,14 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None, countr
 
     activities_data = activities.get("data")
     sanitized_activities = _sanitize_activities(activities_data)
+    places_data = places.get("data")
     weather_data = weather.get("data")
 
     return {
         "data": {
             **base_data,
             "activities": sanitized_activities,
+            "places": places_data,
             "weather": weather_data,
             "wikipedia_extract": wiki_extract_text,
         }

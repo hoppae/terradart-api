@@ -16,3 +16,23 @@ class CityFromRegionThrottle(BaseCityThrottle):
 class CityDetailThrottle(BaseCityThrottle):
     scope = "city-detail"
 
+
+class CityBaseThrottle(BaseCityThrottle):
+    scope = "city-base"
+
+
+class CityActivitiesThrottle(BaseCityThrottle):
+    scope = "city-activities"
+
+
+class CityPlacesThrottle(BaseCityThrottle):
+    scope = "city-places"
+
+
+class CityWeatherThrottle(BaseCityThrottle):
+    scope = "city-weather"
+
+
+class CityWikipediaThrottle(BaseCityThrottle):
+    scope = "city-wikipedia"
+

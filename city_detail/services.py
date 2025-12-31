@@ -763,7 +763,15 @@ def _get_wikipedia_extract(city: str, state: str | None = None, country: str | N
         }
 
 
-def get_city_detail(city: str, radius: int = 1, state: str | None = None, country: str | None = None):
+def get_city_detail(city: str, radius: int = 1, state: str | None = None,
+    country: str | None = None, includes: list[str] | None = None):
+
+    allowed_sections = {"base", "wikipedia", "weather", "activities", "places"}
+    if includes is None:
+        include_set = allowed_sections
+    else:
+        include_set = {section for section in includes if section in allowed_sections}
+
     cache_city = _normalize_cache_part(city)
     cache_state = _normalize_cache_part(state)
     cache_country = _normalize_cache_part(country)
@@ -801,33 +809,43 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None, countr
             "error_status": 500,
         }
 
-    activities = _get_activities_by_coordinates(latitude, longitude)
-    if "error" in activities:
-        return activities
+    response_data = {}
+    errors = {}
 
-    places = _get_places_by_coordinates(latitude, longitude)
-    if "error" in places:
-        return places
+    if ("base" in include_set):
+        response_data = {**base_data}
 
-    weather = _get_weather_by_coordinates(latitude, longitude)
-    if "error" in weather:
-        return weather
+    if "wikipedia" in include_set:
+        wiki_extract = _get_wikipedia_extract(city, state, country)
+        if "error" in wiki_extract:
+            errors["wikipedia_extract"] = wiki_extract["error"]
+        else:
+            response_data["wikipedia_extract"] = wiki_extract.get("data")
 
-    wiki_extract = _get_wikipedia_extract(city, state, country)
-    wiki_extract_text = None if "error" in wiki_extract else wiki_extract.get("data")
+    if "weather" in include_set:
+        weather = _get_weather_by_coordinates(latitude, longitude)
+        if "error" in weather:
+            errors["weather"] = weather["error"]
+        else:
+            response_data["weather"] = weather.get("data")
 
-    activities_data = activities.get("data")
-    sanitized_activities = _sanitize_activities(activities_data)
-    places_data = places.get("data")
-    weather_data = weather.get("data")
+    if "activities" in include_set:
+        activities = _get_activities_by_coordinates(latitude, longitude, radius)
+        if "error" in activities:
+            errors["activities"] = activities["error"]
+        else:
+            activities_data = activities.get("data")
+            response_data["activities"] = _sanitize_activities(activities_data)
 
-    return {
-        "data": {
-            **base_data,
-            "activities": sanitized_activities,
-            "places": places_data,
-            "weather": weather_data,
-            "wikipedia_extract": wiki_extract_text,
-        }
-    }
+    if "places" in include_set:
+        places = _get_places_by_coordinates(latitude, longitude)
+        if "error" in places:
+            errors["places"] = places["error"]
+        else:
+            response_data["places"] = places.get("data")
+
+    result = {"data": response_data}
+    if errors:
+        result["errors"] = errors
+    return result
 

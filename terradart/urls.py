@@ -16,22 +16,9 @@ Including another URLconf
 """
 from django.urls import path
 
-from city_detail.views import (
-    get_city_base,
-    get_city_activities,
-    get_city_from_region,
-    get_city_detail,
-    get_city_places,
-    get_city_weather,
-    get_city_wikipedia,
-)
+from city_detail.views import get_city_detail, get_city_from_region
 
 urlpatterns = [
     path("get-city/region/<str:region>/", get_city_from_region, name="get-city-from-region"),
-    path("get-city-base/<str:city>/", get_city_base, name="get-city-base"),
     path("get-city-detail/<str:city>/", get_city_detail, name="get-city-detail"),
-    path("get-city-activities/<str:city>/", get_city_activities, name="get-city-activities"),
-    path("get-city-places/<str:city>/", get_city_places, name="get-city-places"),
-    path("get-city-weather/<str:city>/", get_city_weather, name="get-city-weather"),
-    path("get-city-wikipedia/<str:city>/", get_city_wikipedia, name="get-city-wikipedia"),
 ]

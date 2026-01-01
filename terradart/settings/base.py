@@ -63,12 +63,7 @@ WSGI_APPLICATION = "terradart.wsgi.application"
 REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "city-region": "30/minute",
-        "city-detail": "10/minute",
-        "city-base": "10/minute",
-        "city-activities": "10/minute",
-        "city-places": "10/minute",
-        "city-weather": "10/minute",
-        "city-wikipedia": "10/minute",
+        "city-detail": "60/minute",
     }
 }
 

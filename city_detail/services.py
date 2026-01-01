@@ -41,6 +41,8 @@ _ALLOWED_HTML_ATTRS = {
     "a": ["href", "title", "rel"],
 }
 
+ALLOWED_SECTIONS = ("base", "wikipedia", "weather", "activities", "places")
+
 
 def _eligible_country(country):
     if not isinstance(country, dict):
@@ -766,7 +768,7 @@ def _get_wikipedia_extract(city: str, state: str | None = None, country: str | N
 def get_city_detail(city: str, radius: int = 1, state: str | None = None,
     country: str | None = None, includes: list[str] | None = None):
 
-    allowed_sections = {"base", "wikipedia", "weather", "activities", "places"}
+    allowed_sections = set(ALLOWED_SECTIONS)
     if includes is None:
         include_set = allowed_sections
     else:

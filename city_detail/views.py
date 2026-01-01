@@ -1,18 +1,24 @@
 from city_detail.services import (
+    ALLOWED_SECTIONS,
     get_city_detail as fetch_city_detail,
     resolve_city_for_region,
 )
-from city_detail.throttles import (
-    CityActivitiesThrottle,
-    CityBaseThrottle,
-    CityDetailThrottle,
-    CityFromRegionThrottle,
-    CityPlacesThrottle,
-    CityWeatherThrottle,
-    CityWikipediaThrottle,
-)
+from city_detail.throttles import CityDetailThrottle, CityFromRegionThrottle
 from rest_framework.decorators import api_view, throttle_classes
 from rest_framework.response import Response
+
+
+def _resolve_includes(params):
+    includes_param = params.get("includes")
+    if not includes_param:
+        return None
+
+    requested = {
+        part.strip().lower()
+        for part in includes_param.split(",")
+        if part.strip()
+    }
+    return [section for section in ALLOWED_SECTIONS if section in requested]
 
 
 @api_view(["GET"])
@@ -35,78 +41,14 @@ def get_city_detail(request, city: str):
 
     state = request.query_params.get("state")
     country = request.query_params.get("country")
+    includes = _resolve_includes(request.query_params)
+    if includes is not None and not includes:
+        return Response(
+            {"error": "No valid details requested", "allowed_includes": ALLOWED_SECTIONS},
+            status=400,
+        )
 
-    result = fetch_city_detail(city, radius, state, country)
-    if "error" in result:
-        return Response(result["error"], status=result["error_status"])
-    return Response(result)
-
-
-@api_view(["GET"])
-@throttle_classes([CityBaseThrottle])
-def get_city_base(request, city: str):
-    state = request.query_params.get("state")
-    country = request.query_params.get("country")
-
-    result = fetch_city_detail(city, 1, state, country, includes=["base"])
-    if "error" in result:
-        return Response(result["error"], status=result["error_status"])
-    return Response(result)
-
-
-@api_view(["GET"])
-@throttle_classes([CityWikipediaThrottle])
-def get_city_wikipedia(request, city: str):
-    state = request.query_params.get("state")
-    country = request.query_params.get("country")
-
-    result = fetch_city_detail(city, 1, state, country, includes=["wikipedia"])
-    if "error" in result:
-        return Response(result["error"], status=result["error_status"])
-    return Response(result)
-
-
-@api_view(["GET"])
-@throttle_classes([CityWeatherThrottle])
-def get_city_weather(request, city: str):
-    state = request.query_params.get("state")
-    country = request.query_params.get("country")
-
-    result = fetch_city_detail(city, 1, state, country, includes=["weather"])
-    if "error" in result:
-        return Response(result["error"], status=result["error_status"])
-    return Response(result)
-
-
-@api_view(["GET"])
-@throttle_classes([CityActivitiesThrottle])
-def get_city_activities(request, city: str):
-    try:
-        radius = int(request.query_params.get("radius", 1))
-    except ValueError:
-        return Response({"error": "radius must be an integer"}, status=400)
-
-    state = request.query_params.get("state")
-    country = request.query_params.get("country")
-
-    result = fetch_city_detail(city, radius, state, country, includes=["activities"])
-    if "error" in result:
-        return Response(result["error"], status=result["error_status"])
-    return Response(result)
-
-
-@api_view(["GET"])
-@throttle_classes([CityPlacesThrottle])
-def get_city_places(request, city: str):
-    try:
-        radius = int(request.query_params.get("radius", 1))
-    except ValueError:
-        return Response({"error": "radius must be an integer"}, status=400)
-
-    state = request.query_params.get("state")
-    country = request.query_params.get("country")
-
-    result = fetch_city_detail(city, radius, state, country, includes=["places"])
+    result = fetch_city_detail(city, radius, state, country, includes=includes)
     if "error" in result:
         return Response(result["error"], status=result["error_status"])
     return Response(result)

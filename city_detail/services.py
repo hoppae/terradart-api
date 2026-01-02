@@ -10,6 +10,7 @@ from django.conf import settings
 from django.core.cache import cache
 from geopy.exc import GeocoderTimedOut, GeopyError
 from geopy.geocoders import Nominatim
+from openai import OpenAI
 from terradart.api_logging import log_api_failure
 from urllib.parse import quote_plus
 
@@ -17,12 +18,16 @@ CSC_API_KEY = os.getenv("CSC_API_KEY")
 AMADEUS_CLIENT_ID = os.getenv("AMADEUS_CLIENT_ID")
 AMADEUS_CLIENT_SECRET = os.getenv("AMADEUS_CLIENT_SECRET")
 FOURSQUARE_API_KEY = os.getenv("FOURSQUARE_API_KEY")
+LLM_API_KEY = os.getenv("LLM_API_KEY")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL")
+LLM_MODEL = os.getenv("LLM_MODEL")
 
 CACHE_TIMEOUT_SECONDS = int(os.getenv("CACHE_TIMEOUT_SECONDS", "300"))
 
 _geolocator = Nominatim(user_agent="terradart-api", timeout=5)
 
 _amadeus_client = None
+_llm_client = None
 
 _ALLOWED_HTML_TAGS = [
     "b",
@@ -41,7 +46,7 @@ _ALLOWED_HTML_ATTRS = {
     "a": ["href", "title", "rel"],
 }
 
-ALLOWED_SECTIONS = ("base", "wikipedia", "weather", "activities", "places")
+ALLOWED_SECTIONS = ("base", "summary", "weather", "activities", "places")
 
 
 def _eligible_country(country):
@@ -193,6 +198,16 @@ def _get_cities_by_state(iso2_country_code: str, iso2_state_code: str):
             context = {"iso2_country_code": iso2_country_code, "iso2_state_code": iso2_state_code})
 
         return []
+
+
+def _get_llm_client():
+    global _llm_client
+    if _llm_client:
+        return _llm_client
+    if not LLM_API_KEY:
+        return None
+    _llm_client = OpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
+    return _llm_client
 
 
 def resolve_city_for_region(region: str, wants_capital: bool):
@@ -624,85 +639,27 @@ def _get_weather_by_coordinates(latitude: float, longitude: float):
         }
 
 
-def _fetch_extract(title: str):
-    response = requests.get(
-        "https://en.wikipedia.org/w/api.php",
-        params={
-            "action": "query",
-            "prop": "extracts",
-            "exintro": "",
-            "explaintext": "",
-            "format": "json",
-            "titles": title,
-        },
-        headers={
-            "User-Agent": "terradart-api (contact: admin@terradart.com)",
-        },
-        timeout=5,
-    )
-    response.raise_for_status()
-    data = response.json()
-    pages = data.get("query", {}).get("pages", {})
-    if isinstance(pages, dict) and pages:
-        first_page = next(iter(pages.values()))
-        extract = first_page.get("extract")
-        return _clean_first_sentence(extract)
-    return None
+def _get_city_summary(city: str, state: str | None = None, country: str | None = None):
+    if not getattr(settings, "LLM_SUMMARY_ENABLED", True):
+        return {"data": None}
 
+    cache_city = _normalize_cache_part(city)
+    cache_state = _normalize_cache_part(state)
+    cache_country = _normalize_cache_part(country)
+    cache_key = f"city-summary:{cache_city}:{cache_state}:{cache_country}"
 
-def _extract_mentions_location(extract: str | None, state_name: str | None, country_name: str | None):
-    if not extract:
-        return False
-    text = extract.lower()
-    if state_name and state_name.lower() in text:
-        return True
-    if country_name and country_name.lower() in text:
-        return True
-    return False
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return {"data": cached}
 
+    client = _get_llm_client()
+    if client is None:
+        return {
+            "error": {"error": "Missing LLM API key", "detail": "Set LLM_API_KEY"},
+            "error_status": 500,
+        }
 
-def _clean_first_sentence(extract: str | None) -> str | None:
-    if not isinstance(extract, str):
-        return extract
-
-    parts = re.split(r"(?<=[.!?])\s", extract, maxsplit=1)
-    first = parts[0] if parts else extract
-    rest = parts[1] if len(parts) > 1 else ""
-
-    # manual cleanup for missing text
-    first = first.replace("()", "").replace("(, ", "(").replace("(;", "(").replace("( ", "(").replace("( ", "(").replace("(; ", "(").replace("(or ; ", "(").replace(" )", ")")
-
-    if rest:
-        return f"{first} {rest}"
-    return first
-
-
-def _wiki_opensearch(term: str, limit: int = 5):
-    response = requests.get(
-        "https://en.wikipedia.org/w/api.php",
-        params={
-            "action": "opensearch",
-            "search": term,
-            "limit": limit,
-            "namespace": 0,
-            "format": "json",
-            "redirects": "resolve"
-        },
-        headers={
-            "User-Agent": "terradart-api (contact: admin@terradart.com)",
-        },
-        timeout=5,
-    )
-    response.raise_for_status()
-    data = response.json()
-    if isinstance(data, list) and len(data) > 1 and isinstance(data[1], list):
-        return data[1]
-    return []
-
-
-def _get_wikipedia_extract(city: str, state: str | None = None, country: str | None = None):
     country_name = None
-
     if country:
         country_details = _get_country_details(country)
         if isinstance(country_details, dict):
@@ -711,57 +668,53 @@ def _get_wikipedia_extract(city: str, state: str | None = None, country: str | N
         if not country_name:
             country_name = country
 
+    location_parts = [city]
+    if state:
+        location_parts.append(state)
+    if country_name:
+        location_parts.append(country_name)
+    location_label = ", ".join([part for part in location_parts if part])
+
     try:
-        chosen_extract = None
+        completion = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a precise assistant that writes the lead paragraph of a "
+                        "Wikipedia article. Keep it neutral, factual, and avoid "
+                        "speculation or promotional language."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Write a 1-2 paragraph, Wikipedia-style opening paragraph about {location_label}. "
+                        "Include high-level geographic context and any notable historical or cultural "
+                        "facts that are widely accepted."
+                    ),
+                },
+            ],
+            temperature=0
+        )
 
-        if state:
-            title = f"{city}, {state}"
-            extract = _fetch_extract(title)
+        content = None
+        if completion and getattr(completion, "choices", None):
+            message = completion.choices[0].message
+            content = getattr(message, "content", None)
 
-            if extract:
-                chosen_extract = extract
-            else:
-                if country_name:
-                    country_title = f"{city}, {country_name}"
-                    country_extract = _fetch_extract(country_title)
-                    if country_extract:
-                        chosen_extract = country_extract
+        cleaned = re.sub(r"\s+", " ", content).strip() if isinstance(content, str) else None
+        cache.set(cache_key, cleaned, timeout=CACHE_TIMEOUT_SECONDS)
+        return {"data": cleaned}
+    except Exception as exception:
+        log_api_failure("city_detail_summary_fetch_error", reason=str(exception),
+            context={"city": city, "state": state, "country": country})
 
-                if chosen_extract is None:
-                    extract = _fetch_extract(city)
-                    has_location = _extract_mentions_location(extract, state, country_name)
-                    if has_location:
-                        chosen_extract = extract
-
-        else:
-            extract = _fetch_extract(city)
-            has_location = _extract_mentions_location(extract, None, country_name)
-
-            if has_location:
-                chosen_extract = extract
-            elif country_name:
-                country_title = f"{city}, {country_name}"
-                country_extract = _fetch_extract(country_title)
-                if country_extract:
-                    chosen_extract = country_extract
-
-        if chosen_extract is None:
-            titles = _wiki_opensearch(city, limit=5)
-            if isinstance(titles, list) and titles:
-                for opensearch_title in titles:
-                    extract = _fetch_extract(opensearch_title)
-                    if _extract_mentions_location(extract, state, country_name):
-                        chosen_extract = extract
-                        break
-
-        return {"data": chosen_extract}
-    except requests.exceptions.RequestException as exception:
-        log_api_failure("city_detail_wikipedia_fetch_error", reason = str(exception),
-            context = {"city": city, "state": state, "country": country})
-
+        status_code = getattr(getattr(exception, "response", None), "status_code", 502)
         return {
-            "error": {"error": "Failed to fetch Wikipedia extract", "detail": str(exception)},
-            "error_status": 502,
+            "error": {"error": "Failed to generate summary", "detail": str(exception)},
+            "error_status": status_code,
         }
 
 
@@ -817,12 +770,12 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None,
     if ("base" in include_set):
         response_data = {**base_data}
 
-    if "wikipedia" in include_set:
-        wiki_extract = _get_wikipedia_extract(city, state, country)
-        if "error" in wiki_extract:
-            errors["wikipedia_extract"] = wiki_extract["error"]
+    if "summary" in include_set:
+        summary = _get_city_summary(city, state, country)
+        if "error" in summary:
+            errors["summary"] = summary["error"]
         else:
-            response_data["wikipedia_extract"] = wiki_extract.get("data")
+            response_data["summary"] = summary.get("data")
 
     if "weather" in include_set:
         weather = _get_weather_by_coordinates(latitude, longitude)

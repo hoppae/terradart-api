@@ -7,8 +7,9 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-local")
 
 REDIS_URL = os.getenv("REDIS_URL")
 
-AMADEUS_ENABLED = True
-FOURSQUARE_ENABLED = True
+AMADEUS_ENABLED = False
+FOURSQUARE_ENABLED = False
+LLM_SUMMARY_ENABLED = False
 
 CACHES = {
     "default": {

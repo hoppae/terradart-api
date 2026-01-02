@@ -682,17 +682,18 @@ def _get_city_summary(city: str, state: str | None = None, country: str | None =
                 {
                     "role": "system",
                     "content": (
-                        "You are a precise assistant that writes the lead paragraph of a "
-                        "Wikipedia article. Keep it neutral, factual, and avoid "
-                        "speculation or promotional language."
+                        "You write opening paragraphs for Wikipedia. Be neutral, factual, "
+                        "and avoid speculation, value-laden adjectives, and characterization "
+                        "of policy (e.g., 'tolerant', 'intolerant')."
                     ),
                 },
                 {
                     "role": "user",
                     "content": (
-                        f"Write a 1-2 paragraph, Wikipedia-style opening paragraph about {location_label}. "
-                        "Include high-level geographic context and any notable historical or cultural "
-                        "facts that are widely accepted."
+                        f"Write a Wikipedia-style opening paragraph about {location_label}. "
+                        "Include high-level geographic context and any notable, widely accepted "
+                        "cultural/historical facts. Aim for 3-6 sentences; length "
+                        "should vary based on cultural/historical significance."
                     ),
                 },
             ],

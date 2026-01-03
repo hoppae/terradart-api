@@ -1,9 +1,10 @@
 from city_detail.services import (
     ALLOWED_SECTIONS,
     get_city_detail as fetch_city_detail,
+    get_countries_all,
     resolve_city_for_region,
 )
-from city_detail.throttles import CityDetailThrottle, CityFromRegionThrottle
+from city_detail.throttles import CityDetailThrottle, CityFromRegionThrottle, CountriesAllThrottle
 from rest_framework.decorators import api_view, throttle_classes
 from rest_framework.response import Response
 
@@ -52,4 +53,13 @@ def get_city_detail(request, city: str):
     if "error" in result:
         return Response(result["error"], status=result["error_status"])
     return Response(result)
+
+
+@api_view(["GET"])
+@throttle_classes([CountriesAllThrottle])
+def get_countries(request):
+    result = get_countries_all()
+    if "error" in result:
+        return Response(result["error"], status=result["error_status"])
+    return Response(result["data"])
 

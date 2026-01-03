@@ -16,3 +16,6 @@ class CityFromRegionThrottle(BaseCityThrottle):
 class CityDetailThrottle(BaseCityThrottle):
     scope = "city-detail"
 
+
+class CountriesAllThrottle(BaseCityThrottle):
+    scope = "countries-all"

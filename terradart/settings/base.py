@@ -65,6 +65,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "city-region": "30/minute",
         "city-detail": "60/minute",
+        "countries-all": "100/minute",
     }
 }
 

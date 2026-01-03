@@ -120,6 +120,31 @@ def _get_countries_by_region(region: str):
         }
 
 
+def get_countries_all():
+    cache_key = "countries:all:cca2-name"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return {"data": cached}
+
+    try:
+        response = requests.get(
+            "https://restcountries.com/v3.1/all",
+            params={"fields": "cca2,name"},
+            timeout=5,
+        )
+        response.raise_for_status()
+        data = response.json()
+        cache.set(cache_key, data, timeout=CACHE_TIMEOUT_SECONDS)
+        return {"data": data}
+    except requests.exceptions.RequestException as exception:
+        log_api_failure("city_detail_countries_all_fetch_error", reason=str(exception))
+        status_code = getattr(getattr(exception, "response", None), "status_code", 502)
+        return {
+            "error": {"error": "Failed to fetch countries", "detail": str(exception)},
+            "error_status": status_code,
+        }
+
+
 def _get_country_details(iso2_country_code: str | None):
     if not iso2_country_code:
         return None
@@ -684,7 +709,7 @@ def _get_city_summary(city: str, state: str | None = None, country: str | None =
                     "content": (
                         "You write opening paragraphs for Wikipedia. Be neutral, factual, "
                         "and avoid speculation, value-laden adjectives, and characterization "
-                        "of policy (e.g., 'tolerant', 'intolerant')."
+                        "of policy (e.g., 'tolerant', 'intolerant'). Use plain text."
                     ),
                 },
                 {

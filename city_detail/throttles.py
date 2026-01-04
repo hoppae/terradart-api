@@ -19,3 +19,15 @@ class CityDetailThrottle(BaseCityThrottle):
 
 class CountriesAllThrottle(BaseCityThrottle):
     scope = "countries-all"
+
+
+class StatesByCountryThrottle(BaseCityThrottle):
+    scope = "states-by-country"
+
+
+class CitiesByCountryThrottle(BaseCityThrottle):
+    scope = "cities-by-country"
+
+
+class CitiesByStateThrottle(BaseCityThrottle):
+    scope = "cities-by-state"

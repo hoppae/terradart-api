@@ -1,10 +1,20 @@
 from city_detail.services import (
     ALLOWED_SECTIONS,
+    get_cities_by_country,
+    get_cities_by_state,
     get_city_detail as fetch_city_detail,
     get_countries_all,
+    get_states_by_country,
     resolve_city_for_region,
 )
-from city_detail.throttles import CityDetailThrottle, CityFromRegionThrottle, CountriesAllThrottle
+from city_detail.throttles import (
+    CitiesByCountryThrottle,
+    CitiesByStateThrottle,
+    CityDetailThrottle,
+    CityFromRegionThrottle,
+    CountriesAllThrottle,
+    StatesByCountryThrottle,
+)
 from rest_framework.decorators import api_view, throttle_classes
 from rest_framework.response import Response
 
@@ -59,6 +69,33 @@ def get_city_detail(request, city: str):
 @throttle_classes([CountriesAllThrottle])
 def get_countries(request):
     result = get_countries_all()
+    if "error" in result:
+        return Response(result["error"], status=result["error_status"])
+    return Response(result["data"])
+
+
+@api_view(["GET"])
+@throttle_classes([StatesByCountryThrottle])
+def get_states(request, country: str):
+    result = get_states_by_country(country)
+    if "error" in result:
+        return Response(result["error"], status=result["error_status"])
+    return Response(result["data"])
+
+
+@api_view(["GET"])
+@throttle_classes([CitiesByCountryThrottle])
+def get_cities_for_country(request, country: str):
+    result = get_cities_by_country(country)
+    if "error" in result:
+        return Response(result["error"], status=result["error_status"])
+    return Response(result["data"])
+
+
+@api_view(["GET"])
+@throttle_classes([CitiesByStateThrottle])
+def get_cities_for_state(request, country: str, state: str):
+    result = get_cities_by_state(country, state)
     if "error" in result:
         return Response(result["error"], status=result["error_status"])
     return Response(result["data"])

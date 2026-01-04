@@ -66,6 +66,9 @@ REST_FRAMEWORK = {
         "city-region": "30/minute",
         "city-detail": "60/minute",
         "countries-all": "100/minute",
+        "states-by-country": "100/minute",
+        "cities-by-country": "100/minute",
+        "cities-by-state": "100/minute",
     }
 }
 

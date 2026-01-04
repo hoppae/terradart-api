@@ -173,18 +173,18 @@ def _get_country_details(iso2_country_code: str | None):
         return None
 
 
-def _get_states_by_country(iso2_country_code: str):
-    if not iso2_country_code or not CSC_API_KEY:
+def _get_all_states():
+    if not CSC_API_KEY:
         return []
 
-    cache_key = f"states:{iso2_country_code.lower()}"
+    cache_key = "states:all"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
     try:
         response = requests.get(
-            f"https://api.countrystatecity.in/v1/countries/{iso2_country_code}/states",
+            "https://api.countrystatecity.in/v1/states",
             headers={"X-CSCAPI-KEY": CSC_API_KEY},
             timeout=5,
         )
@@ -193,10 +193,41 @@ def _get_states_by_country(iso2_country_code: str):
         cache.set(cache_key, data, timeout=CACHE_TIMEOUT_SECONDS)
         return data
     except requests.exceptions.RequestException as exception:
-        log_api_failure("city_detail_states_by_country_fetch_error", reason = str(exception),
-            context = {"iso2_country_code": iso2_country_code})
-
+        log_api_failure("city_detail_states_all_fetch_error", reason=str(exception))
         return []
+
+
+def _get_states_by_country(iso2_country_code: str):
+    if not iso2_country_code or not CSC_API_KEY:
+        return []
+
+    all_states = _get_all_states()
+    if all_states:
+        target = iso2_country_code.lower()
+        filtered = [state for state in all_states if str(state.get("country_code", "")).lower() == target]
+        return filtered
+
+
+def get_states_by_country(iso2_country_code: str | None):
+    if not iso2_country_code:
+        return {
+            "error": {"error": "Missing country code"},
+            "error_status": 400,
+        }
+
+    data = _get_states_by_country(iso2_country_code)
+    return {"data": data}
+
+
+def get_cities_by_country(iso2_country_code: str | None):
+    if not iso2_country_code:
+        return {
+            "error": {"error": "Missing country code"},
+            "error_status": 400,
+        }
+
+    data = _get_cities_by_country(iso2_country_code)
+    return {"data": data}
 
 
 def _get_cities_by_state(iso2_country_code: str, iso2_state_code: str):
@@ -223,6 +254,17 @@ def _get_cities_by_state(iso2_country_code: str, iso2_state_code: str):
             context = {"iso2_country_code": iso2_country_code, "iso2_state_code": iso2_state_code})
 
         return []
+
+
+def get_cities_by_state(iso2_country_code: str | None, iso2_state_code: str | None):
+    if not iso2_country_code or not iso2_state_code:
+        return {
+            "error": {"error": "Missing country or state code"},
+            "error_status": 400,
+        }
+
+    data = _get_cities_by_state(iso2_country_code, iso2_state_code)
+    return {"data": data}
 
 
 def _get_llm_client():

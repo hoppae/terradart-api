@@ -121,7 +121,7 @@ def _get_countries_by_region(region: str):
 
 
 def get_countries_all():
-    cache_key = "countries:all:cca2-name"
+    cache_key = "countries:all"
     cached = cache.get(cache_key)
     if cached is not None:
         return {"data": cached}
@@ -129,7 +129,7 @@ def get_countries_all():
     try:
         response = requests.get(
             "https://restcountries.com/v3.1/all",
-            params={"fields": "cca2,name"},
+            params={"fields": "name,cca2,cca3"},
             timeout=5,
         )
         response.raise_for_status()

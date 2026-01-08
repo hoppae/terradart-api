@@ -38,3 +38,6 @@ htmlcov/
 
 # Deployment
 .railway/
+
+# Agent
+.claude/

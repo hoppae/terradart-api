@@ -842,14 +842,10 @@ class TestGetCitySummaryLlmPath:
         mock_client = MagicMock()
         mock_client.chat.completions.create.return_value = mock_completion
 
-        country_details = {"name": {"common": "United States"}}
-
         with patch.object(services.settings, "LLM_SUMMARY_ENABLED", True), \
-             patch("city_detail.services._get_llm_client") as mock_get_client, \
-             patch("city_detail.services._get_country_details") as mock_country:
+             patch("city_detail.services._get_llm_client") as mock_get_client:
             mock_get_client.return_value = mock_client
-            mock_country.return_value = country_details
-            services._get_city_summary("Austin", "TX", "US")
+            services._get_city_summary("Austin", "TX", "United States")
 
         # Verify the prompt includes the full country name
         call_args = mock_client.chat.completions.create.call_args

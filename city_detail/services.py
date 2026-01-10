@@ -862,20 +862,11 @@ def _get_city_summary(city: str, state: str | None = None, country: str | None =
             "error_status": 500,
         }
 
-    country_name = None
-    if country:
-        country_details = _get_country_details(country)
-        if isinstance(country_details, dict):
-            name_info = country_details.get("name") or {}
-            country_name = name_info.get("common") or name_info.get("official")
-        if not country_name:
-            country_name = country
-
     location_parts = [city]
     if state:
         location_parts.append(state)
-    if country_name:
-        location_parts.append(country_name)
+    if country:
+        location_parts.append(country)
     location_label = ", ".join([part for part in location_parts if part])
 
     try:
@@ -971,6 +962,8 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None,
     coordinates = base_data.get("coordinates") or {}
     latitude = coordinates.get("latitude")
     longitude = coordinates.get("longitude")
+
+    country = base_data.get("country") or country
     if latitude is None or longitude is None:
         return {
             "error": {"error": "Missing coordinates for city", "city": city},
@@ -984,7 +977,14 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None,
         response_data = {**base_data}
 
     if "summary" in include_set:
-        summary = _get_city_summary(city, state, country)
+        country_for_summary = country
+        country_details = base_data.get("country_details")
+        if isinstance(country_details, dict):
+            name_common = (country_details.get("name") or {}).get("common")
+            if name_common:
+                country_for_summary = name_common
+
+        summary = _get_city_summary(city, state, country_for_summary)
         if "error" in summary:
             errors["summary"] = summary["error"]
         else:

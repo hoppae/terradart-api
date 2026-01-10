@@ -357,6 +357,29 @@ class TestGetCityDetail:
         assert "data" in result
         assert "weather" in result["data"]
 
+    @responses.activate
+    def test_infers_country_from_geocoder_address(self, mock_geocoder, mock_cache, mock_llm_disabled):
+        country_data = {
+            "name": {"common": "United States", "official": "United States of America"},
+            "cca2": "US",
+            "flags": {"png": "https://example.com/flag.png"},
+            "region": "Americas",
+            "subregion": "North America",
+        }
+        responses.add(
+            responses.GET,
+            "https://restcountries.com/v3.1/name/USA",
+            json=[country_data],
+            status=200,
+        )
+
+        # mock_geocoder returns address "New York, NY, USA"
+        result = services.get_city_detail("New York", includes=["base"])
+
+        assert "data" in result
+        assert result["data"]["country"] == "US"
+        assert result["data"]["country_details"]["cca2"] == "US"
+
 
 @pytest.mark.integration
 class TestResolveCityForRegion:
@@ -515,6 +538,27 @@ class TestGetCountryDetails:
 
         result = services._get_country_details("XX")
         assert result is None
+
+    @responses.activate
+    def test_looks_up_by_name_for_longer_strings(self, mock_cache):
+        country_data = {
+            "name": {"common": "United States", "official": "United States of America"},
+            "cca2": "US",
+            "flags": {"png": "https://example.com/flag.png"},
+            "region": "Americas",
+            "subregion": "North America",
+        }
+        responses.add(
+            responses.GET,
+            "https://restcountries.com/v3.1/name/United States",
+            json=[country_data],
+            status=200,
+        )
+
+        result = services._get_country_details("United States")
+        assert result is not None
+        assert result["cca2"] == "US"
+        assert result["name"]["common"] == "United States"
 
 
 class TestGetCitiesByCountryInternal:
@@ -1226,14 +1270,6 @@ class TestSearchViatorProductsByDestination:
         assert "error" in result
         assert result["error_status"] == 500
 
-    def test_returns_cached_data(self, mock_cache, viator_products_response):
-        mock_cache.get.return_value = viator_products_response["products"]
-
-        result = services._search_viator_products_by_destination(562)
-
-        assert "data" in result
-        assert result["data"] == viator_products_response["products"]
-
 
 @pytest.mark.integration
 class TestGetViatorActivities:
@@ -1283,3 +1319,13 @@ class TestGetViatorActivities:
             result = services._get_viator_activities(53.3498, -6.2603)
 
         assert "error" in result
+
+    def test_returns_cached_data(self, mock_cache, viator_products_response):
+        mock_cache.get.return_value = viator_products_response["products"]
+
+        with patch.object(services.settings, "VIATOR_ENABLED", True, create=True), \
+             patch("city_detail.services.VIATOR_API_KEY", "test-key"):
+            result = services._get_viator_activities(53.3498, -6.2603)
+
+        assert "data" in result
+        assert result["data"] == viator_products_response["products"]

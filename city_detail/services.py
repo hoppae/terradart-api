@@ -580,11 +580,6 @@ def _lookup_viator_destination_id(latitude: float, longitude: float):
 
 
 def _search_viator_products_by_destination(destination_id: int, limit: int = 50, currency: str = "USD"):
-    cache_key = f"viator-products:{destination_id}:{limit}:{currency}"
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return {"data": cached}
-
     if not VIATOR_API_KEY:
         return {
             "error": {"error": "Missing Viator API key"},
@@ -611,7 +606,6 @@ def _search_viator_products_by_destination(destination_id: int, limit: int = 50,
         data = response.json()
 
         products = data.get("products", [])
-        cache.set(cache_key, products, timeout=CACHE_TIMEOUT_SECONDS)
         return {"data": products}
     except requests.exceptions.RequestException as exception:
         log_api_failure("viator_products_search_error", reason=str(exception),
@@ -631,6 +625,11 @@ def _get_viator_activities(latitude: float, longitude: float, limit: int = 50, c
     if not VIATOR_API_KEY:
         return {"data": []}
 
+    cache_key = f"viator-activities:{latitude}:{longitude}:{limit}:{currency}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return {"data": cached}
+
     dest_result = _lookup_viator_destination_id(latitude, longitude)
     if "error" in dest_result:
         return dest_result
@@ -639,7 +638,10 @@ def _get_viator_activities(latitude: float, longitude: float, limit: int = 50, c
     if not destination_id:
         return {"data": []}
 
-    return _search_viator_products_by_destination(destination_id, limit, currency)
+    result = _search_viator_products_by_destination(destination_id, limit, currency)
+    if "data" in result:
+        cache.set(cache_key, result["data"], timeout=CACHE_TIMEOUT_SECONDS)
+    return result
 
 
 def _get_places_by_coordinates(latitude: float, longitude: float, radius: int = 10):

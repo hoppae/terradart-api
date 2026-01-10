@@ -18,6 +18,8 @@ CSC_API_KEY = os.getenv("CSC_API_KEY")
 AMADEUS_CLIENT_ID = os.getenv("AMADEUS_CLIENT_ID")
 AMADEUS_CLIENT_SECRET = os.getenv("AMADEUS_CLIENT_SECRET")
 FOURSQUARE_API_KEY = os.getenv("FOURSQUARE_API_KEY")
+VIATOR_API_KEY = os.getenv("VIATOR_API_KEY")
+VIATOR_BASE_URL = os.getenv("VIATOR_BASE_URL")
 LLM_API_KEY = os.getenv("LLM_API_KEY")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL")
 LLM_MODEL = os.getenv("LLM_MODEL")
@@ -46,7 +48,7 @@ _ALLOWED_HTML_ATTRS = {
     "a": ["href", "title", "rel"],
 }
 
-ALLOWED_SECTIONS = ("base", "summary", "weather", "activities", "places")
+ALLOWED_SECTIONS = ("base", "summary", "weather", "viator_activities", "amadeus_activities", "places")
 
 
 def _eligible_country(country):
@@ -476,7 +478,7 @@ def _get_amadeus_client():
     return _amadeus_client
 
 
-def _get_activities_by_coordinates(latitude: float, longitude: float, radius: int = 1):
+def _get_amadeus_activities(latitude: float, longitude: float, radius: int = 1):
     cache_key = f"activities:{latitude}:{longitude}:{radius}"
     cached = cache.get(cache_key)
     if cached is not None:
@@ -506,6 +508,134 @@ def _get_activities_by_coordinates(latitude: float, longitude: float, radius: in
             "error": {"error": "Failed to fetch activities", "detail": str(exception)},
             "error_status": status_code,
         }
+
+
+def _get_viator_headers():
+    return {
+        "Accept": "application/json;version=2.0",
+        "Accept-Language": "en-US",
+        "exp-api-key": VIATOR_API_KEY,
+    }
+
+
+def _fetch_viator_destinations():
+    cache_key = "viator-destinations:all"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return {"data": cached}
+
+    if not VIATOR_API_KEY:
+        return {
+            "error": {"error": "Missing Viator API key"},
+            "error_status": 500,
+        }
+
+    try:
+        response = requests.get(
+            f"{VIATOR_BASE_URL}/destinations",
+            headers=_get_viator_headers(),
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        destinations = data.get("destinations", [])
+        cache.set(cache_key, destinations, timeout=CACHE_TIMEOUT_SECONDS)
+        return {"data": destinations}
+    except requests.exceptions.RequestException as exception:
+        log_api_failure("viator_destinations_fetch_error", reason=str(exception))
+
+        status_code = getattr(getattr(exception, "response", None), "status_code", 502)
+        return {
+            "error": {"error": "Failed to fetch Viator destinations", "detail": str(exception)},
+            "error_status": status_code,
+        }
+
+
+def _lookup_viator_destination_id(latitude: float, longitude: float):
+    dest_result = _fetch_viator_destinations()
+    if "error" in dest_result:
+        return dest_result
+
+    destinations = dest_result.get("data", [])
+
+    def distance_squared(dest):
+        center = dest.get("center")
+        if not center:
+            return float("inf")
+        dlat = center.get("latitude", 0) - latitude
+        dlon = center.get("longitude", 0) - longitude
+        return dlat * dlat + dlon * dlon
+
+    best = min(destinations, key=distance_squared, default=None)
+
+    if not best:
+        return {"data": None}
+
+    return {"data": best.get("destinationId")}
+
+
+def _search_viator_products_by_destination(destination_id: int, limit: int = 50, currency: str = "USD"):
+    cache_key = f"viator-products:{destination_id}:{limit}:{currency}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return {"data": cached}
+
+    if not VIATOR_API_KEY:
+        return {
+            "error": {"error": "Missing Viator API key"},
+            "error_status": 500,
+        }
+
+    try:
+        response = requests.post(
+            f"{VIATOR_BASE_URL}/products/search",
+            headers=_get_viator_headers(),
+            json={
+                "filtering": {
+                    "destination": str(destination_id),
+                },
+                "pagination": {
+                    "start": 1,
+                    "count": limit,
+                },
+                "currency": currency,
+            },
+            timeout=5,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        products = data.get("products", [])
+        cache.set(cache_key, products, timeout=CACHE_TIMEOUT_SECONDS)
+        return {"data": products}
+    except requests.exceptions.RequestException as exception:
+        log_api_failure("viator_products_search_error", reason=str(exception),
+            context={"destination_id": destination_id, "limit": limit})
+
+        status_code = getattr(getattr(exception, "response", None), "status_code", 502)
+        return {
+            "error": {"error": "Failed to search Viator products", "detail": str(exception)},
+            "error_status": status_code,
+        }
+
+
+def _get_viator_activities(latitude: float, longitude: float, limit: int = 50, currency: str = "USD"):
+    if not getattr(settings, "VIATOR_ENABLED", True):
+        return {"data": []}
+
+    if not VIATOR_API_KEY:
+        return {"data": []}
+
+    dest_result = _lookup_viator_destination_id(latitude, longitude)
+    if "error" in dest_result:
+        return dest_result
+
+    destination_id = dest_result.get("data")
+    if not destination_id:
+        return {"data": []}
+
+    return _search_viator_products_by_destination(destination_id, limit, currency)
 
 
 def _get_places_by_coordinates(latitude: float, longitude: float, radius: int = 10):
@@ -852,13 +982,21 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None,
         else:
             response_data["weather"] = weather.get("data")
 
-    if "activities" in include_set:
-        activities = _get_activities_by_coordinates(latitude, longitude, radius)
+    if "viator_activities" in include_set:
+        activities = _get_viator_activities(latitude, longitude)
         if "error" in activities:
-            errors["activities"] = activities["error"]
+            errors["viator_activities"] = activities["error"]
         else:
             activities_data = activities.get("data")
-            response_data["activities"] = _sanitize_activities(activities_data)
+            response_data["viator_activities"] = _sanitize_activities(activities_data)
+
+    if "amadeus_activities" in include_set:
+        activities = _get_amadeus_activities(latitude, longitude, radius)
+        if "error" in activities:
+            errors["amadeus_activities"] = activities["error"]
+        else:
+            activities_data = activities.get("data")
+            response_data["amadeus_activities"] = _sanitize_activities(activities_data)
 
     if "places" in include_set:
         places = _get_places_by_coordinates(latitude, longitude)

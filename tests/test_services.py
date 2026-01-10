@@ -622,19 +622,19 @@ class TestGetAmadeusClient:
 
 
 @pytest.mark.integration
-class TestGetActivitiesByCoordinates:
-    """Tests for _get_activities_by_coordinates function."""
+class TestGetAmadeusActivities:
+    """Tests for _get_amadeus_activities function."""
 
     def test_returns_empty_when_disabled(self, mock_cache):
         with patch("city_detail.services._get_amadeus_client") as mock:
             mock.return_value = {"disabled": True}
-            result = services._get_activities_by_coordinates(40.7, -74.0)
+            result = services._get_amadeus_activities(40.7, -74.0)
         assert result == {"data": []}
 
     def test_returns_error_when_client_error(self, mock_cache):
         with patch("city_detail.services._get_amadeus_client") as mock:
             mock.return_value = {"error": {"error": "No credentials"}, "error_status": 500}
-            result = services._get_activities_by_coordinates(40.7, -74.0)
+            result = services._get_amadeus_activities(40.7, -74.0)
         assert "error" in result
         assert result["error_status"] == 500
 
@@ -647,7 +647,7 @@ class TestGetActivitiesByCoordinates:
 
         with patch("city_detail.services._get_amadeus_client") as mock:
             mock.return_value = mock_client
-            result = services._get_activities_by_coordinates(40.7, -74.0, radius=5)
+            result = services._get_amadeus_activities(40.7, -74.0, radius=5)
 
         assert "data" in result
         assert len(result["data"]) == 2
@@ -661,7 +661,7 @@ class TestGetActivitiesByCoordinates:
         cached_activities = [{"name": "Cached Tour"}]
         mock_cache.get.return_value = cached_activities
 
-        result = services._get_activities_by_coordinates(40.7, -74.0)
+        result = services._get_amadeus_activities(40.7, -74.0)
 
         assert result == {"data": cached_activities}
 
@@ -675,7 +675,7 @@ class TestGetActivitiesByCoordinates:
 
         with patch("city_detail.services._get_amadeus_client") as mock:
             mock.return_value = mock_client
-            result = services._get_activities_by_coordinates(40.7, -74.0)
+            result = services._get_amadeus_activities(40.7, -74.0)
 
         assert "error" in result
 
@@ -960,24 +960,34 @@ class TestGetCityDetailAllSections:
     """Tests for get_city_detail with various section combinations."""
 
     @responses.activate
-    def test_returns_activities_section(self, mock_geocoder, mock_cache):
+    def test_returns_viator_activities_section(self, mock_geocoder, mock_cache):
         mock_activities = [{"name": "Tour A"}]
 
-        with patch("city_detail.services._get_activities_by_coordinates") as mock_act, \
-             patch.object(services.settings, "LLM_SUMMARY_ENABLED", False):
+        with patch("city_detail.services._get_viator_activities") as mock_act:
             mock_act.return_value = {"data": mock_activities}
-            result = services.get_city_detail("TestCity", includes=["activities"])
+            result = services.get_city_detail("TestCity", includes=["viator_activities"])
 
         assert "data" in result
-        assert "activities" in result["data"]
-        assert result["data"]["activities"] == mock_activities
+        assert "viator_activities" in result["data"]
+        assert result["data"]["viator_activities"] == mock_activities
+
+    @responses.activate
+    def test_returns_amadeus_activities_section(self, mock_geocoder, mock_cache):
+        mock_activities = [{"name": "Amadeus Tour"}]
+
+        with patch("city_detail.services._get_amadeus_activities") as mock_act:
+            mock_act.return_value = {"data": mock_activities}
+            result = services.get_city_detail("TestCity", includes=["amadeus_activities"])
+
+        assert "data" in result
+        assert "amadeus_activities" in result["data"]
+        assert result["data"]["amadeus_activities"] == mock_activities
 
     @responses.activate
     def test_returns_places_section(self, mock_geocoder, mock_cache):
         mock_places = [{"name": "Central Park"}]
 
-        with patch("city_detail.services._get_places_by_coordinates") as mock_places_fn, \
-             patch.object(services.settings, "LLM_SUMMARY_ENABLED", False):
+        with patch("city_detail.services._get_places_by_coordinates") as mock_places_fn:
             mock_places_fn.return_value = {"data": mock_places}
             result = services.get_city_detail("TestCity", includes=["places"])
 
@@ -995,8 +1005,7 @@ class TestGetCityDetailAllSections:
 
     @responses.activate
     def test_collects_errors_from_sections(self, mock_geocoder, mock_cache):
-        with patch("city_detail.services._get_weather_by_coordinates") as mock_weather, \
-             patch.object(services.settings, "LLM_SUMMARY_ENABLED", False):
+        with patch("city_detail.services._get_weather_by_coordinates") as mock_weather:
             mock_weather.return_value = {"error": {"error": "Weather API failed"}, "error_status": 502}
             result = services.get_city_detail("TestCity", includes=["weather"])
 
@@ -1051,5 +1060,226 @@ class TestAllowedSections:
     """Tests for ALLOWED_SECTIONS constant."""
 
     def test_contains_expected_sections(self):
-        expected = {"base", "summary", "weather", "activities", "places"}
+        expected = {"base", "summary", "weather", "viator_activities", "amadeus_activities", "places"}
         assert set(services.ALLOWED_SECTIONS) == expected
+
+
+class TestGetViatorHeaders:
+    """Tests for _get_viator_headers function."""
+
+    def test_returns_correct_headers(self):
+        with patch("city_detail.services.VIATOR_API_KEY", "test-api-key"):
+            headers = services._get_viator_headers()
+
+        assert headers["Accept"] == "application/json;version=2.0"
+        assert headers["Accept-Language"] == "en-US"
+        assert headers["exp-api-key"] == "test-api-key"
+
+
+VIATOR_TEST_BASE_URL = "https://viatortest.test"
+
+
+@pytest.mark.integration
+class TestFetchViatorDestinations:
+    """Tests for _fetch_viator_destinations function."""
+
+    @responses.activate
+    def test_returns_destinations_on_success(self, mock_cache, viator_destinations_response):
+        with patch("city_detail.services.VIATOR_API_KEY", "test-key"), \
+             patch("city_detail.services.VIATOR_BASE_URL", VIATOR_TEST_BASE_URL):
+            responses.add(
+                responses.GET,
+                f"{VIATOR_TEST_BASE_URL}/destinations",
+                json=viator_destinations_response,
+                status=200,
+            )
+
+            result = services._fetch_viator_destinations()
+
+        assert "data" in result
+        assert len(result["data"]) == 4
+
+    @responses.activate
+    def test_returns_error_on_failure(self, mock_cache):
+        with patch("city_detail.services.VIATOR_API_KEY", "test-key"), \
+             patch("city_detail.services.VIATOR_BASE_URL", VIATOR_TEST_BASE_URL):
+            responses.add(
+                responses.GET,
+                f"{VIATOR_TEST_BASE_URL}/destinations",
+                json={"error": "Unauthorized"},
+                status=401,
+            )
+
+            result = services._fetch_viator_destinations()
+
+        assert "error" in result
+        assert result["error_status"] == 401
+
+    def test_returns_error_without_api_key(self, mock_cache):
+        with patch("city_detail.services.VIATOR_API_KEY", None):
+            result = services._fetch_viator_destinations()
+
+        assert "error" in result
+        assert result["error_status"] == 500
+
+    def test_returns_cached_data(self, mock_cache, viator_destinations_response):
+        mock_cache.get.return_value = viator_destinations_response["destinations"]
+
+        result = services._fetch_viator_destinations()
+
+        assert "data" in result
+        assert result["data"] == viator_destinations_response["destinations"]
+
+
+class TestLookupViatorDestinationId:
+    """Tests for _lookup_viator_destination_id function."""
+
+    def test_finds_nearest_destination_by_coordinates(self, mock_cache, viator_destinations_response):
+        with patch("city_detail.services._fetch_viator_destinations") as mock_fetch:
+            mock_fetch.return_value = {"data": viator_destinations_response["destinations"]}
+
+            # Dublin, Ireland coordinates
+            result = services._lookup_viator_destination_id(53.3498, -6.2603)
+
+        assert "data" in result
+        assert result["data"] == 562  # Dublin, Ireland
+
+    def test_finds_dublin_georgia_for_us_coordinates(self, mock_cache, viator_destinations_response):
+        with patch("city_detail.services._fetch_viator_destinations") as mock_fetch:
+            mock_fetch.return_value = {"data": viator_destinations_response["destinations"]}
+
+            # Dublin, Georgia coordinates
+            result = services._lookup_viator_destination_id(32.5404, -82.9039)
+
+        assert "data" in result
+        assert result["data"] == 4499  # Dublin, Georgia
+
+    def test_returns_none_for_empty_destinations(self, mock_cache):
+        with patch("city_detail.services._fetch_viator_destinations") as mock_fetch:
+            mock_fetch.return_value = {"data": []}
+
+            result = services._lookup_viator_destination_id(53.3498, -6.2603)
+
+        assert result["data"] is None
+
+    def test_returns_error_when_fetch_fails(self, mock_cache):
+        with patch("city_detail.services._fetch_viator_destinations") as mock_fetch:
+            mock_fetch.return_value = {"error": {"error": "API Error"}, "error_status": 500}
+
+            result = services._lookup_viator_destination_id(53.3498, -6.2603)
+
+        assert "error" in result
+
+    def test_handles_destination_without_center(self, mock_cache):
+        destinations = [
+            {"destinationId": 1, "name": "No Center"},
+            {"destinationId": 2, "name": "Has Center", "center": {"latitude": 53.0, "longitude": -6.0}},
+        ]
+        with patch("city_detail.services._fetch_viator_destinations") as mock_fetch:
+            mock_fetch.return_value = {"data": destinations}
+
+            result = services._lookup_viator_destination_id(53.0, -6.0)
+
+        assert result["data"] == 2
+
+
+@pytest.mark.integration
+class TestSearchViatorProductsByDestination:
+    """Tests for _search_viator_products_by_destination function."""
+
+    @responses.activate
+    def test_returns_products_on_success(self, mock_cache, viator_products_response):
+        with patch("city_detail.services.VIATOR_API_KEY", "test-key"), \
+             patch("city_detail.services.VIATOR_BASE_URL", VIATOR_TEST_BASE_URL):
+            responses.add(
+                responses.POST,
+                f"{VIATOR_TEST_BASE_URL}/products/search",
+                json=viator_products_response,
+                status=200,
+            )
+
+            result = services._search_viator_products_by_destination(562)
+
+        assert "data" in result
+        assert len(result["data"]) == 2
+
+    @responses.activate
+    def test_returns_error_on_failure(self, mock_cache):
+        with patch("city_detail.services.VIATOR_API_KEY", "test-key"), \
+             patch("city_detail.services.VIATOR_BASE_URL", VIATOR_TEST_BASE_URL):
+            responses.add(
+                responses.POST,
+                f"{VIATOR_TEST_BASE_URL}/products/search",
+                json={"error": "Bad request"},
+                status=400,
+            )
+
+            result = services._search_viator_products_by_destination(562)
+
+        assert "error" in result
+        assert result["error_status"] == 400
+
+    def test_returns_error_without_api_key(self, mock_cache):
+        with patch("city_detail.services.VIATOR_API_KEY", None):
+            result = services._search_viator_products_by_destination(562)
+
+        assert "error" in result
+        assert result["error_status"] == 500
+
+    def test_returns_cached_data(self, mock_cache, viator_products_response):
+        mock_cache.get.return_value = viator_products_response["products"]
+
+        result = services._search_viator_products_by_destination(562)
+
+        assert "data" in result
+        assert result["data"] == viator_products_response["products"]
+
+
+@pytest.mark.integration
+class TestGetViatorActivities:
+    """Tests for _get_viator_activities function."""
+
+    def test_returns_empty_when_disabled(self, mock_cache):
+        with patch.object(services.settings, "VIATOR_ENABLED", False, create=True):
+            result = services._get_viator_activities(53.3498, -6.2603)
+
+        assert result == {"data": []}
+
+    def test_returns_empty_without_api_key(self, mock_cache):
+        with patch("city_detail.services.VIATOR_API_KEY", None):
+            result = services._get_viator_activities(53.3498, -6.2603)
+
+        assert result == {"data": []}
+
+    def test_returns_products_on_success(self, mock_cache, viator_products_response):
+        with patch.object(services.settings, "VIATOR_ENABLED", True, create=True), \
+             patch("city_detail.services.VIATOR_API_KEY", "test-key"), \
+             patch("city_detail.services._lookup_viator_destination_id") as mock_lookup, \
+             patch("city_detail.services._search_viator_products_by_destination") as mock_search:
+            mock_lookup.return_value = {"data": 562}
+            mock_search.return_value = {"data": viator_products_response["products"]}
+
+            result = services._get_viator_activities(53.3498, -6.2603)
+
+        assert "data" in result
+        assert len(result["data"]) == 2
+
+    def test_returns_empty_when_no_destination_found(self, mock_cache):
+        with patch.object(services.settings, "VIATOR_ENABLED", True, create=True), \
+             patch("city_detail.services.VIATOR_API_KEY", "test-key"), \
+             patch("city_detail.services._lookup_viator_destination_id") as mock_lookup:
+            mock_lookup.return_value = {"data": None}
+
+            result = services._get_viator_activities(0.0, 0.0)
+
+        assert result == {"data": []}
+
+    def test_returns_error_when_lookup_fails(self, mock_cache):
+        with patch.object(services.settings, "VIATOR_ENABLED", True, create=True), \
+             patch("city_detail.services.VIATOR_API_KEY", "test-key"), \
+             patch("city_detail.services._lookup_viator_destination_id") as mock_lookup:
+            mock_lookup.return_value = {"error": {"error": "Fetch failed"}, "error_status": 502}
+
+            result = services._get_viator_activities(53.3498, -6.2603)
+
+        assert "error" in result

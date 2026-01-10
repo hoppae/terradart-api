@@ -206,3 +206,75 @@ def mock_all_external_services(mock_geocoder, mock_cache, mock_llm_disabled):
         "cache": mock_cache,
         "settings": mock_llm_disabled,
     }
+
+
+_VIATOR_DESTINATIONS_DATA = {
+    "destinations": [
+        {
+            "destinationId": 562,
+            "name": "Dublin",
+            "type": "CITY",
+            "parentDestinationId": 75,
+            "lookupId": "6.562",
+            "center": {"latitude": 53.3498, "longitude": -6.2603},
+        },
+        {
+            "destinationId": 75,
+            "name": "Ireland",
+            "type": "COUNTRY",
+            "parentDestinationId": 1,
+            "lookupId": "6.75",
+            "center": {"latitude": 53.1424, "longitude": -7.6921},
+        },
+        {
+            "destinationId": 4499,
+            "name": "Dublin",
+            "type": "CITY",
+            "parentDestinationId": 702,
+            "lookupId": "6.4499",
+            "center": {"latitude": 32.5404, "longitude": -82.9039},
+        },
+        {
+            "destinationId": 702,
+            "name": "United States",
+            "type": "COUNTRY",
+            "parentDestinationId": 1,
+            "lookupId": "6.702",
+            "center": {"latitude": 37.0902, "longitude": -95.7129},
+        },
+    ],
+}
+
+
+@pytest.fixture(scope="module")
+def viator_destinations_response():
+    """Sample Viator destinations API response."""
+    return copy.deepcopy(_VIATOR_DESTINATIONS_DATA)
+
+
+_VIATOR_PRODUCTS_DATA = {
+    "products": [
+        {
+            "productCode": "12345P1",
+            "title": "Dublin Walking Tour",
+            "description": "Explore historic Dublin",
+            "pricing": {"summary": {"fromPrice": 25.00}},
+            "rating": 4.8,
+            "reviewCount": 150,
+        },
+        {
+            "productCode": "12345P2",
+            "title": "Guinness Storehouse",
+            "description": "Visit the famous brewery",
+            "pricing": {"summary": {"fromPrice": 30.00}},
+            "rating": 4.9,
+            "reviewCount": 500,
+        },
+    ],
+}
+
+
+@pytest.fixture(scope="module")
+def viator_products_response():
+    """Sample Viator products search API response."""
+    return copy.deepcopy(_VIATOR_PRODUCTS_DATA)

@@ -14,7 +14,7 @@ ALLOWED_HOSTS = ["api.terradart.com"]
 
 CORS_ALLOWED_ORIGINS = ["https://terradart.com", "https://www.terradart.com"]
 
-AMADEUS_ENABLED = True
+VIATOR_ENABLED = True
 FOURSQUARE_ENABLED = True
 LLM_SUMMARY_ENABLED = True
 

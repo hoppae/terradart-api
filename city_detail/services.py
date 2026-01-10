@@ -147,19 +147,23 @@ def get_countries_all():
         }
 
 
-def _get_country_details(iso2_country_code: str | None):
-    if not iso2_country_code:
+def _get_country_details(country: str | None):
+    if not country:
         return None
 
-    cache_key = f"country-info:{iso2_country_code.lower()}"
+    country = country.strip()
+    cache_key = f"country-info:{country.lower()}"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
+    is_code = len(country) == 2
+    endpoint = f"https://restcountries.com/v3.1/{'alpha' if is_code else 'name'}/{country}"
+
     try:
         response = requests.get(
-            f"https://restcountries.com/v3.1/alpha/{iso2_country_code}",
-            params={"fields": "name,flags,region,subregion"},
+            endpoint,
+            params={"fields": "name,cca2,flags,region,subregion"},
             timeout=5,
         )
         response.raise_for_status()
@@ -169,8 +173,8 @@ def _get_country_details(iso2_country_code: str | None):
         cache.set(cache_key, data, timeout=CACHE_TIMEOUT_SECONDS)
         return data
     except requests.exceptions.RequestException as exception:
-        log_api_failure("city_detail_country_details_fetch_error", reason = str(exception),
-            context = {"iso2_country_code": iso2_country_code})
+        log_api_failure("city_detail_country_details_fetch_error", reason=str(exception),
+            context={"country": country, "is_code": is_code})
 
         return None
 
@@ -434,7 +438,7 @@ def _geocode_city(city: str, state: str | None, country: str | None):
 
     for query, country_code in attempts:
         try:
-            location = _geolocator.geocode(query, country_codes=country_code, timeout=5)
+            location = _geolocator.geocode(query, country_codes=country_code, language="en", timeout=5)
         except GeocoderTimedOut:
             location = None
         except GeopyError as exc:
@@ -939,7 +943,20 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None,
             return geocode_result
         location = geocode_result["location"]
 
-        country_details = _get_country_details(country)
+        country_details = None
+        if country:
+            country_details = _get_country_details(country)
+        elif isinstance(location.address, str) and location.address:
+            address_parts = location.address.split(", ")
+            if address_parts:
+                country_name = address_parts[-1]
+                country_name_overrides = {
+                    "United States": "US",
+                }
+                country_name = country_name_overrides.get(country_name, country_name)
+                country_details = _get_country_details(country_name)
+                if country_details:
+                    country = country_details.get("cca2")
 
         base_data = {
             "city": city,

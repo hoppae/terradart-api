@@ -158,7 +158,7 @@ def _get_country_details(country: str | None):
         return cached
 
     is_code = len(country) == 2
-    endpoint = f"https://restcountries.com/v3.1/{'alpha' if is_code else 'name'}/{country}"
+    endpoint = f"https://restcountries.com/v3.1/{'alpha' if is_code else 'name'}/{country}?fullText=true"
 
     try:
         response = requests.get(
@@ -952,10 +952,6 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None,
             address_parts = location.address.split(", ")
             if address_parts:
                 country_name = address_parts[-1]
-                country_name_overrides = {
-                    "United States": "US",
-                }
-                country_name = country_name_overrides.get(country_name, country_name)
                 country_details = _get_country_details(country_name)
                 if country_details:
                     country = country_details.get("cca2")

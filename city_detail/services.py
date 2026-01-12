@@ -456,7 +456,7 @@ def _geocode_city(city: str, state: str | None, country: str | None):
         context = {"city": city, "state": state, "country": country})
 
     return {
-        "error": {"error": "City not found", "city": city, "state": state, "country": country},
+        "error": {"error": "City not found"},
         "error_status": 404,
     }
 
@@ -978,7 +978,7 @@ def get_city_detail(city: str, radius: int = 1, state: str | None = None,
     country = base_data.get("country") or country
     if latitude is None or longitude is None:
         return {
-            "error": {"error": "Missing coordinates for city", "city": city},
+            "error": {"error": "Missing coordinates for city"},
             "error_status": 500,
         }
 

@@ -645,7 +645,7 @@ def _get_viator_activities(latitude: float, longitude: float, limit: int = 50, c
 
 
 def _get_places_by_coordinates(latitude: float, longitude: float, radius: int = 10):
-    cache_key = f"places:{latitude}:{longitude}:{radius}"
+    cache_key = f"places:v2:{latitude}:{longitude}:{radius}"
     cached = cache.get(cache_key)
     if cached is not None:
         return {"data": cached}
@@ -672,6 +672,7 @@ def _get_places_by_coordinates(latitude: float, longitude: float, radius: int = 
                 "radius": radius_meters,
                 "limit": 50,
                 "sort": "RATING",
+                "exclude_all_chains": "true",
                 "fields": ",".join(
                     [
                         "fsq_place_id",
@@ -711,6 +712,10 @@ def _get_places_by_coordinates(latitude: float, longitude: float, radius: int = 
         response.raise_for_status()
         data = response.json()
         results = data.get("results", []) if isinstance(data, dict) else []
+        results = [
+            place for place in results
+            if place.get("veracity_rating", 0) >= 5
+        ]
         cache.set(cache_key, results, timeout=CACHE_TIMEOUT_SECONDS)
         return {"data": results}
     except requests.exceptions.RequestException as exception:
@@ -758,6 +763,11 @@ def _pick_indexed(series, idx):
 
 
 def _get_weather_by_coordinates(latitude: float, longitude: float):
+    cache_key = f"weather:{latitude}:{longitude}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return {"data": cached}
+
     try:
         response = requests.get(
             "https://api.open-meteo.com/v1/forecast",
@@ -830,7 +840,9 @@ def _get_weather_by_coordinates(latitude: float, longitude: float):
                 "weathercode": daily.get("weathercode", [None, None])[1],
             }
 
-        return {"data": {"current": current_payload, "next_day": next_day, "raw": data}}
+        result = {"current": current_payload, "next_day": next_day, "raw": data}
+        cache.set(cache_key, result, timeout=300)
+        return {"data": result}
     except requests.exceptions.RequestException as exception:
         log_api_failure("city_detail_weather_fetch_error", reason=str(exception),
             context={"latitude": latitude, "longitude": longitude})

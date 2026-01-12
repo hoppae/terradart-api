@@ -167,6 +167,7 @@ _FOURSQUARE_DATA = {
             "categories": [{"name": "Park"}],
             "location": {"address": "Central Park, NY"},
             "rating": 9.5,
+            "veracity_rating": 8,
         },
         {
             "fsq_place_id": "def456",
@@ -174,6 +175,15 @@ _FOURSQUARE_DATA = {
             "categories": [{"name": "Plaza"}],
             "location": {"address": "Times Square, NY"},
             "rating": 8.5,
+            "veracity_rating": 7,
+        },
+        {
+            "fsq_place_id": "ghi789",
+            "name": "Sketchy Place",
+            "categories": [{"name": "Unknown"}],
+            "location": {"address": "Nowhere, NY"},
+            "rating": 5.0,
+            "veracity_rating": 3,
         },
     ]
 }

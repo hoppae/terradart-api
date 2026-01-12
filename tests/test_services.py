@@ -292,7 +292,7 @@ class TestGetWeatherByCoordinates:
     """Tests for _get_weather_by_coordinates function."""
 
     @responses.activate
-    def test_returns_weather_data(self, weather_response):
+    def test_returns_weather_data(self, mock_cache, weather_response):
         responses.add(
             responses.GET,
             "https://api.open-meteo.com/v1/forecast",
@@ -306,7 +306,7 @@ class TestGetWeatherByCoordinates:
         assert result["data"]["current"]["temperature"] == 45.0
 
     @responses.activate
-    def test_returns_error_on_failure(self):
+    def test_returns_error_on_failure(self, mock_cache):
         responses.add(
             responses.GET,
             "https://api.open-meteo.com/v1/forecast",
